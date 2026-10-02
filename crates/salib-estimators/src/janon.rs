@@ -120,6 +120,8 @@ impl fmt::Display for JanonIndices {
     }
 }
 
+/// Nonfinite variance or numerators yield zero indices; nonfinite total variance is reported as zero.
+///
 /// Estimate first-order Sobol' indices via Janon 2014 `T_N^X`.
 ///
 /// Consumes the same `SaltelliMatrix` as
@@ -147,35 +149,39 @@ where
     // inside the per-factor T_N^X formula uses joint variance and
     // is computed below.
     let mean_y = tree_sum(&y) / n_f;
-    let y_sq: Vec<f64> = y.iter().map(|v| v * v).collect();
-    let total_variance = tree_sum(&y_sq) / n_f - mean_y * mean_y;
+    let y_sq: Vec<f64> = y.iter().map(|v| (v - mean_y).powi(2)).collect();
+    let total_variance = tree_sum(&y_sq) / n_f;
 
     let mut first_order = Vec::with_capacity(d);
     for y_xi in &y_x {
         let mean_yx = tree_sum(y_xi) / n_f;
-        let mean_joint = 0.5 * (mean_y + mean_yx);
+        let mean_joint = 0.5 * mean_y + 0.5 * mean_yx;
 
-        // Numerator (Janon Eq 6): (1/N) Σ Y·Y^X − Ȳ₂².
+        // Numerator (Janon Eq 6), centered about the joint mean.
         let yy_xi: Vec<f64> = y
             .iter()
             .zip(y_xi.iter())
-            .map(|(yj, yxj)| yj * yxj)
+            .map(|(yj, yxj)| (yj - mean_joint) * (yxj - mean_joint))
             .collect();
         let mean_y_yx = tree_sum(&yy_xi) / n_f;
-        let num = mean_y_yx - mean_joint * mean_joint;
+        let num = mean_y_yx;
 
-        // Denominator (Janon Eq 6): (1/N) Σ (Y² + Y^X²)/2 − Ȳ₂².
+        // Denominator (Janon Eq 6), centered about the joint mean.
         // This is the joint second-moment estimator that gives
         // Janon's asymptotic-efficiency property.
         let half_sq_sum: Vec<f64> = y
             .iter()
             .zip(y_xi.iter())
-            .map(|(yj, yxj)| 0.5 * (yj * yj + yxj * yxj))
+            .map(|(yj, yxj)| 0.5 * (yj - mean_joint).powi(2) + 0.5 * (yxj - mean_joint).powi(2))
             .collect();
         let mean_half_sq = tree_sum(&half_sq_sum) / n_f;
-        let denom = mean_half_sq - mean_joint * mean_joint;
+        let denom = mean_half_sq;
 
-        let s_i = if denom > 1e-15 { num / denom } else { 0.0 };
+        let s_i = if denom.is_finite() && denom > 1e-15 && num.is_finite() {
+            num / denom
+        } else {
+            0.0
+        };
         first_order.push(s_i);
     }
 
@@ -200,7 +206,12 @@ where
             for j in (i + 1)..d {
                 let cross: Vec<f64> = (0..n).map(|k| fba[j][k] * y_x[i][k] - fa_fb[k]).collect();
                 let vij = tree_sum(&cross) / n_f;
-                let s2_ij = vij / total_variance - first_order[i] - first_order[j];
+                let s2_ij =
+                    if total_variance.is_finite() && total_variance > 1e-15 && vij.is_finite() {
+                        vij / total_variance - first_order[i] - first_order[j]
+                    } else {
+                        0.0
+                    };
                 row.push(s2_ij);
             }
             s2.push(row);
@@ -210,7 +221,11 @@ where
 
     JanonIndices {
         first_order,
-        total_variance,
+        total_variance: if total_variance.is_finite() {
+            total_variance
+        } else {
+            0.0
+        },
         second_order,
     }
 }
@@ -233,6 +248,46 @@ mod tests {
     use super::*;
     use salib_core::RngState;
     use salib_samplers::{build_saltelli_matrix, LhsSampler};
+
+    #[test]
+    fn phase3_nonfinite_variance_yields_zero_indices() {
+        let mut rng = RngState::from_seed([0x42; 32]);
+        let matrix = build_saltelli_matrix(&LhsSampler::classic(4), 4, true, &mut rng).unwrap();
+        for invalid in [f64::NAN, f64::INFINITY] {
+            let result = estimate_janon(&matrix, |_| invalid);
+            assert!(result.total_variance.is_finite());
+            for value in result
+                .first_order
+                .iter()
+                .chain(result.second_order.as_ref().unwrap().iter().flatten())
+            {
+                assert!(value.is_finite());
+                assert!(value.abs() < 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn phase3_centered_variance_large_offset() {
+        let values = [1e9, 1e9 + 1.0, 1e9 + 2.0, 1e9 + 3.0];
+        let mut rng = RngState::from_seed([0x42; 32]);
+        let mut matrix =
+            build_saltelli_matrix(&LhsSampler::classic(4), 4, false, &mut rng).unwrap();
+        for (row, value) in values.iter().enumerate() {
+            matrix.a[[row, 0]] = *value;
+            matrix.b[[row, 0]] = *value;
+            for hybrid in &mut matrix.a_b {
+                hybrid[[row, 0]] = *value;
+            }
+        }
+        let result = estimate_janon(&matrix, |x| x[0]);
+        assert!(result.total_variance.is_finite());
+        assert!((result.total_variance - 1.25).abs() < 1e-12);
+        for value in result.first_order {
+            assert!(value.is_finite());
+            assert!((value - 1.0).abs() < 1e-12);
+        }
+    }
 
     // ── Output shape ──────────────────────────────────────────────
 

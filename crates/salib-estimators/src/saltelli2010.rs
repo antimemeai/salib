@@ -19,7 +19,7 @@
 //! Total = N(d+2) model evaluations.
 //!
 //! f_0  = (1/N) Σⱼ fa[j]
-//! D    = Var(Y) = (1/N) Σⱼ fa[j]² - f_0²    // sample variance, biased form
+//! D    = Var(Y) = (1/N) Σⱼ (fa[j] - f_0)²  // population variance
 //!
 //! S_i   = (1/N) Σⱼ fb[j] · (fab[i][j] - fa[j]) / D     (Saltelli 2010 Eq c)
 //! S_T_i = (1/(2N)) Σⱼ (fa[j] - fab[i][j])² / D         (Jansen 1999, Eq f)
@@ -47,7 +47,7 @@
 )]
 
 use ndarray::Array2;
-use salib_core::{tree_dot, tree_sum, tree_var};
+use salib_core::{tree_dot, tree_sum};
 use salib_samplers::SaltelliMatrix;
 
 use crate::sobol_indices::SobolIndices;
@@ -55,6 +55,8 @@ use crate::sobol_indices::SobolIndices;
 /// Estimate first-order and total-order Sobol' indices via Saltelli
 /// 2010 (first-order) + Jansen 1999 (total-order). Pure function;
 /// no RNG.
+///
+/// Nonfinite variance or numerators yield zero indices; nonfinite total variance is reported as zero.
 ///
 /// `model` is called `n × (d + 2)` times. For a typical SA campaign
 /// with N=8192 and d=3, that's 40,960 evaluations.
@@ -83,18 +85,13 @@ where
         .map(|m| evaluate_rows(m, &model))
         .collect();
 
-    // Total variance D = Var(Y), sample-estimated from fa.
-    // `tree_var` returns the *unbiased* (Bessel-corrected) variance.
-    // Saltelli's formulas typically use the biased estimator
-    // `(1/N) Σ (fa - mean)²`. The difference is `(N-1)/N`, which
-    // washes out in MC noise at N ≥ 1024 but matters for byte-exact
-    // SALib differential. SALib uses `np.var` which defaults to
-    // biased — match it.
+    // Population variance (1/N), matching SALib's np.var default.
+    // Center before squaring to avoid cancellation at large offsets.
     #[allow(clippy::cast_precision_loss)]
     let n_f = n as f64;
     let f0 = tree_sum(&fa) / n_f;
-    let fa_sq: Vec<f64> = fa.iter().map(|x| x * x).collect();
-    let d_var = tree_sum(&fa_sq) / n_f - f0 * f0;
+    let fa_sq: Vec<f64> = fa.iter().map(|x| (x - f0).powi(2)).collect();
+    let d_var = tree_sum(&fa_sq) / n_f;
 
     // Per-factor first-order and total-order.
     let mut first_order = Vec::with_capacity(d);
@@ -105,11 +102,13 @@ where
         //   S_i = (1/N) Σⱼ fb[j] · (fab[i][j] - fa[j]) / D
         let diff: Vec<f64> = fab_i.iter().zip(fa.iter()).map(|(ab, a)| ab - a).collect();
         let s_i_num = tree_dot(&fb, &diff) / n_f;
-        first_order.push(if d_var.abs() < 1e-30 {
-            0.0
-        } else {
-            s_i_num / d_var
-        });
+        first_order.push(
+            if !d_var.is_finite() || d_var.abs() < 1e-30 || !s_i_num.is_finite() {
+                0.0
+            } else {
+                s_i_num / d_var
+            },
+        );
 
         // Jansen 1999 (Saltelli 2010 Eq f):
         //   S_T_i = (1/(2N)) Σⱼ (fa[j] - fab[i][j])² / D
@@ -119,11 +118,13 @@ where
             .map(|(a, ab)| (a - ab).powi(2))
             .collect();
         let s_t_i_num = tree_sum(&sq_diff) / (2.0 * n_f);
-        total_order.push(if d_var.abs() < 1e-30 {
-            0.0
-        } else {
-            s_t_i_num / d_var
-        });
+        total_order.push(
+            if !d_var.is_finite() || d_var.abs() < 1e-30 || !s_t_i_num.is_finite() {
+                0.0
+            } else {
+                s_t_i_num / d_var
+            },
+        );
     }
 
     // ── Second-order indices (Saltelli 2010 Eq d) ────────────────
@@ -151,7 +152,7 @@ where
             for j in (i + 1)..d {
                 let cross: Vec<f64> = (0..n).map(|k| fba[j][k] * fab[i][k] - fa_fb[k]).collect();
                 let vij = tree_sum(&cross) / n_f;
-                let s2_ij = if d_var.abs() < 1e-30 {
+                let s2_ij = if !d_var.is_finite() || d_var.abs() < 1e-30 || !vij.is_finite() {
                     0.0
                 } else {
                     vij / d_var - first_order[i] - first_order[j]
@@ -163,11 +164,14 @@ where
         s2
     });
 
-    // Touch tree_var to surface a use; convergence-rate tests
-    // compare against this for diagnostic purposes.
-    let _diagnostic_var = tree_var(&fa);
-
-    SobolIndices::new(n, d, d_var, first_order, total_order, second_order)
+    SobolIndices::new(
+        n,
+        d,
+        if d_var.is_finite() { d_var } else { 0.0 },
+        first_order,
+        total_order,
+        second_order,
+    )
 }
 
 /// Estimate first-order and total-order Sobol' indices from
@@ -204,8 +208,8 @@ pub fn estimate_saltelli2010_from_outputs(
     #[allow(clippy::cast_precision_loss)]
     let n_f = n as f64;
     let f0 = tree_sum(fa) / n_f;
-    let fa_sq: Vec<f64> = fa.iter().map(|x| x * x).collect();
-    let d_var = tree_sum(&fa_sq) / n_f - f0 * f0;
+    let fa_sq: Vec<f64> = fa.iter().map(|x| (x - f0).powi(2)).collect();
+    let d_var = tree_sum(&fa_sq) / n_f;
 
     let mut first_order = Vec::with_capacity(d);
     let mut total_order = Vec::with_capacity(d);
@@ -213,7 +217,7 @@ pub fn estimate_saltelli2010_from_outputs(
     for fab_i in fab {
         let diff: Vec<f64> = fab_i.iter().zip(fa.iter()).map(|(ab, a)| ab - a).collect();
         let s_i_num = tree_dot(fb, &diff) / n_f;
-        let s_i = if d_var.abs() < 1e-30 {
+        let s_i = if !d_var.is_finite() || d_var.abs() < 1e-30 || !s_i_num.is_finite() {
             0.0
         } else {
             s_i_num / d_var
@@ -226,7 +230,7 @@ pub fn estimate_saltelli2010_from_outputs(
             .map(|(a, ab)| (a - ab).powi(2))
             .collect();
         let s_t_i_num = tree_sum(&sq_diff) / (2.0 * n_f);
-        let s_t_i = if d_var.abs() < 1e-30 {
+        let s_t_i = if !d_var.is_finite() || d_var.abs() < 1e-30 || !s_t_i_num.is_finite() {
             0.0
         } else {
             s_t_i_num / d_var
@@ -234,7 +238,14 @@ pub fn estimate_saltelli2010_from_outputs(
         total_order.push(s_t_i);
     }
 
-    SobolIndices::new(n, d, d_var, first_order, total_order, None)
+    SobolIndices::new(
+        n,
+        d,
+        if d_var.is_finite() { d_var } else { 0.0 },
+        first_order,
+        total_order,
+        None,
+    )
 }
 
 /// Estimate first-order, total-order, and second-order Sobol' indices
@@ -275,8 +286,8 @@ pub fn estimate_saltelli2010_from_outputs_with_second_order(
     #[allow(clippy::cast_precision_loss)]
     let n_f = n as f64;
     let f0 = tree_sum(fa) / n_f;
-    let fa_sq: Vec<f64> = fa.iter().map(|x| x * x).collect();
-    let d_var = tree_sum(&fa_sq) / n_f - f0 * f0;
+    let fa_sq: Vec<f64> = fa.iter().map(|x| (x - f0).powi(2)).collect();
+    let d_var = tree_sum(&fa_sq) / n_f;
 
     let mut first_order = Vec::with_capacity(d);
     let mut total_order = Vec::with_capacity(d);
@@ -284,7 +295,7 @@ pub fn estimate_saltelli2010_from_outputs_with_second_order(
     for fab_i in fab {
         let diff: Vec<f64> = fab_i.iter().zip(fa.iter()).map(|(ab, a)| ab - a).collect();
         let s_i_num = tree_dot(fb, &diff) / n_f;
-        let s_i = if d_var.abs() < 1e-30 {
+        let s_i = if !d_var.is_finite() || d_var.abs() < 1e-30 || !s_i_num.is_finite() {
             0.0
         } else {
             s_i_num / d_var
@@ -297,7 +308,7 @@ pub fn estimate_saltelli2010_from_outputs_with_second_order(
             .map(|(a, ab)| (a - ab).powi(2))
             .collect();
         let s_t_i_num = tree_sum(&sq_diff) / (2.0 * n_f);
-        let s_t_i = if d_var.abs() < 1e-30 {
+        let s_t_i = if !d_var.is_finite() || d_var.abs() < 1e-30 || !s_t_i_num.is_finite() {
             0.0
         } else {
             s_t_i_num / d_var
@@ -314,7 +325,7 @@ pub fn estimate_saltelli2010_from_outputs_with_second_order(
         for j in (i + 1)..d {
             let cross: Vec<f64> = (0..n).map(|k| fba[j][k] * fab[i][k] - fa_fb[k]).collect();
             let vij = tree_sum(&cross) / n_f;
-            let s2_ij = if d_var.abs() < 1e-30 {
+            let s2_ij = if !d_var.is_finite() || d_var.abs() < 1e-30 || !vij.is_finite() {
                 0.0
             } else {
                 vij / d_var - first_order[i] - first_order[j]
@@ -324,7 +335,14 @@ pub fn estimate_saltelli2010_from_outputs_with_second_order(
         s2.push(row);
     }
 
-    SobolIndices::new(n, d, d_var, first_order, total_order, Some(s2))
+    SobolIndices::new(
+        n,
+        d,
+        if d_var.is_finite() { d_var } else { 0.0 },
+        first_order,
+        total_order,
+        Some(s2),
+    )
 }
 
 /// Internal: call `model` on every row of an ndarray matrix and
@@ -354,6 +372,85 @@ mod tests {
     use super::*;
     use salib_core::RngState;
     use salib_samplers::{build_saltelli_matrix, LhsSampler};
+
+    #[test]
+    fn phase3_cached_nonfinite_outputs_yield_zero_indices() {
+        for invalid in [f64::NAN, f64::INFINITY] {
+            let valid = [0.0, 1.0, 2.0, 3.0];
+            let invalid_values = [invalid; 4];
+            for fa in [&valid[..], &invalid_values[..]] {
+                let hybrids = vec![invalid_values.to_vec(); 2];
+                for result in [
+                    estimate_saltelli2010_from_outputs(fa, &invalid_values, &hybrids),
+                    estimate_saltelli2010_from_outputs_with_second_order(
+                        fa,
+                        &invalid_values,
+                        &hybrids,
+                        &hybrids,
+                    ),
+                ] {
+                    assert!(result.total_variance.is_finite());
+                    for value in result
+                        .first_order
+                        .iter()
+                        .chain(&result.total_order)
+                        .chain(result.second_order.iter().flatten().flatten())
+                    {
+                        assert!(value.is_finite());
+                        assert!(value.abs() < 1e-12);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn phase3_nonfinite_variance_yields_zero_indices() {
+        let mut rng = RngState::from_seed([0x42; 32]);
+        let matrix = build_saltelli_matrix(&LhsSampler::classic(4), 4, true, &mut rng).unwrap();
+        for invalid in [f64::NAN, f64::INFINITY] {
+            let result = estimate_saltelli2010(&matrix, |_| invalid);
+            assert!(result.total_variance.is_finite());
+            for value in result
+                .first_order
+                .iter()
+                .chain(&result.total_order)
+                .chain(result.second_order.as_ref().unwrap().iter().flatten())
+            {
+                assert!(value.is_finite());
+                assert!(value.abs() < 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn phase3_centered_variance_large_offset() {
+        let values = [1e9, 1e9 + 1.0, 1e9 + 2.0, 1e9 + 3.0];
+        let mut rng = RngState::from_seed([0x42; 32]);
+        let mut matrix =
+            build_saltelli_matrix(&LhsSampler::classic(4), 4, false, &mut rng).unwrap();
+        for (row, value) in values.iter().enumerate() {
+            matrix.a[[row, 0]] = *value;
+            matrix.b[[row, 0]] = *value;
+            for hybrid in &mut matrix.a_b {
+                hybrid[[row, 0]] = *value;
+            }
+        }
+        let result = estimate_saltelli2010(&matrix, |x| x[0]);
+        assert!(result.total_variance.is_finite());
+        assert!((result.total_variance - 1.25).abs() < 1e-12);
+
+        let outputs = vec![values.to_vec(); 2];
+        for result in [
+            estimate_saltelli2010_from_outputs(&values, &values, &outputs),
+            estimate_saltelli2010_from_outputs_with_second_order(
+                &values, &values, &outputs, &outputs,
+            ),
+        ] {
+            assert!(result.total_variance.is_finite());
+            assert!((result.total_variance - 1.25).abs() < 1e-12);
+        }
+    }
 
     fn fresh_rng() -> RngState {
         RngState::from_seed([0x42; 32])

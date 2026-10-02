@@ -116,9 +116,9 @@ pub enum ImanConoverError {
 /// - [`ImanConoverError::NonSquareTarget`] if the correlation matrix
 ///   is not `d × d`.
 /// - [`ImanConoverError::NonSymmetricTarget`] if any off-diagonal pair
-///   differs by more than `1e-9`.
+///   differs by more than `1e-9` or contains a nonfinite entry.
 /// - [`ImanConoverError::NonUnitDiagonal`] if any diagonal entry
-///   differs from `1.0` by more than `1e-9`.
+///   differs from `1.0` by more than `1e-9` or is nonfinite.
 /// - [`ImanConoverError::NotPositiveDefinite`] if the Cholesky pivot
 ///   becomes non-positive — caller should sanitize the matrix or
 ///   use a nearest-PD projection.
@@ -146,13 +146,13 @@ pub fn iman_conover_transform(
     }
     for i in 0..d {
         let diag = target_rank_correlation[[i, i]];
-        if (diag - 1.0).abs() > 1e-9 {
+        if !diag.is_finite() || (diag - 1.0).abs() > 1e-9 {
             return Err(ImanConoverError::NonUnitDiagonal { i, value: diag });
         }
         for j in (i + 1)..d {
             let upper = target_rank_correlation[[i, j]];
             let lower = target_rank_correlation[[j, i]];
-            if (upper - lower).abs() > 1e-9 {
+            if !upper.is_finite() || !lower.is_finite() || (upper - lower).abs() > 1e-9 {
                 return Err(ImanConoverError::NonSymmetricTarget {
                     i,
                     j,
@@ -278,6 +278,27 @@ fn uniform_01(chacha: &mut rand_chacha::ChaCha20Rng) -> f64 {
 #[cfg(test)]
 #[allow(clippy::float_cmp, clippy::approx_constant)]
 mod tests {
+
+    #[test]
+    fn phase3_correlation_rejects_nonfinite_entries() {
+        let samples = ndarray::array![[0.1, 0.2], [0.3, 0.4]];
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut rng = RngState::from_seed([0x42; 32]);
+            let diagonal = ndarray::array![[invalid, 0.0], [0.0, 1.0]];
+            assert!(matches!(
+                iman_conover_transform(&samples, &diagonal, &mut rng),
+                Err(ImanConoverError::NonUnitDiagonal { .. })
+            ));
+            for (upper, lower) in [(invalid, 0.0), (0.0, invalid), (invalid, invalid)] {
+                let target = ndarray::array![[1.0, upper], [lower, 1.0]];
+                assert!(matches!(
+                    iman_conover_transform(&samples, &target, &mut rng),
+                    Err(ImanConoverError::NonSymmetricTarget { .. })
+                ));
+            }
+        }
+    }
+
     use super::*;
     use ndarray::array;
 

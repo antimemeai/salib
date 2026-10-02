@@ -93,6 +93,8 @@ impl fmt::Display for JansenIndices {
     }
 }
 
+/// Nonfinite variance or numerators yield zero indices; nonfinite total variance is reported as zero.
+///
 /// Estimate first-order Sobol' indices via Jansen 1999.
 pub fn estimate_jansen<F>(matrix: &SaltelliMatrix, model: F) -> JansenIndices
 where
@@ -112,8 +114,8 @@ where
 
     // Total variance from Y (population variance, 1/n).
     let mean_y = tree_sum(&y) / n_f;
-    let y_sq: Vec<f64> = y.iter().map(|v| v * v).collect();
-    let total_variance = tree_sum(&y_sq) / n_f - mean_y * mean_y;
+    let y_sq: Vec<f64> = y.iter().map(|v| (v - mean_y).powi(2)).collect();
+    let total_variance = tree_sum(&y_sq) / n_f;
 
     let mut first_order = Vec::with_capacity(d);
     for y_xi in &y_x {
@@ -126,7 +128,7 @@ where
         let half_avg = tree_sum(&sq_diffs) / (2.0 * n_f);
 
         // S_i = 1 − half_avg / Var(Y).
-        let s_i = if total_variance > 1e-15 {
+        let s_i = if total_variance.is_finite() && total_variance > 1e-15 && half_avg.is_finite() {
             1.0 - half_avg / total_variance
         } else {
             0.0
@@ -155,7 +157,12 @@ where
             for j in (i + 1)..d {
                 let cross: Vec<f64> = (0..n).map(|k| fba[j][k] * y_x[i][k] - fa_fb[k]).collect();
                 let vij = tree_sum(&cross) / n_f;
-                let s2_ij = vij / total_variance - first_order[i] - first_order[j];
+                let s2_ij =
+                    if total_variance.is_finite() && total_variance > 1e-15 && vij.is_finite() {
+                        vij / total_variance - first_order[i] - first_order[j]
+                    } else {
+                        0.0
+                    };
                 row.push(s2_ij);
             }
             s2.push(row);
@@ -165,7 +172,11 @@ where
 
     JansenIndices {
         first_order,
-        total_variance,
+        total_variance: if total_variance.is_finite() {
+            total_variance
+        } else {
+            0.0
+        },
         second_order,
     }
 }
@@ -188,6 +199,42 @@ mod tests {
     use super::*;
     use salib_core::RngState;
     use salib_samplers::{build_saltelli_matrix, LhsSampler};
+
+    #[test]
+    fn phase3_nonfinite_variance_yields_zero_indices() {
+        let mut rng = RngState::from_seed([0x42; 32]);
+        let matrix = build_saltelli_matrix(&LhsSampler::classic(4), 4, true, &mut rng).unwrap();
+        for invalid in [f64::NAN, f64::INFINITY] {
+            let result = estimate_jansen(&matrix, |_| invalid);
+            assert!(result.total_variance.is_finite());
+            for value in result
+                .first_order
+                .iter()
+                .chain(result.second_order.as_ref().unwrap().iter().flatten())
+            {
+                assert!(value.is_finite());
+                assert!(value.abs() < 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn phase3_centered_variance_large_offset() {
+        let values = [1e9, 1e9 + 1.0, 1e9 + 2.0, 1e9 + 3.0];
+        let mut rng = RngState::from_seed([0x42; 32]);
+        let mut matrix =
+            build_saltelli_matrix(&LhsSampler::classic(4), 4, false, &mut rng).unwrap();
+        for (row, value) in values.iter().enumerate() {
+            matrix.a[[row, 0]] = *value;
+            matrix.b[[row, 0]] = *value;
+            for hybrid in &mut matrix.a_b {
+                hybrid[[row, 0]] = *value;
+            }
+        }
+        let result = estimate_jansen(&matrix, |x| x[0]);
+        assert!(result.total_variance.is_finite());
+        assert!((result.total_variance - 1.25).abs() < 1e-12);
+    }
 
     #[test]
     fn output_length_matches_d() {

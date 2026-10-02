@@ -45,7 +45,7 @@ pub enum GTheoryError {
     #[error("g-theory: total variance is zero")]
     ZeroVariance,
     #[error(
-        "g-theory: {coefficient} is undefined because its denominator collapsed to zero while sigma_p remained non-zero"
+        "g-theory: {coefficient} is undefined because its numerator or denominator is nonfinite, or its denominator collapsed to zero while sigma_p remained non-zero"
     )]
     UndefinedReliability { coefficient: &'static str },
 }
@@ -559,6 +559,9 @@ fn reliability_ratio(
     numerator: f64,
     denominator: f64,
 ) -> Result<f64, GTheoryError> {
+    if !numerator.is_finite() || !denominator.is_finite() {
+        return Err(GTheoryError::UndefinedReliability { coefficient });
+    }
     if denominator.abs() <= 1.0e-15 {
         if numerator.abs() <= 1.0e-15 {
             Ok(0.0)
@@ -604,6 +607,20 @@ fn build_bootstrap_ci(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn phase3_reliability_rejects_nonfinite_denominator() {
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(reliability_ratio("g_coefficient", 1.0, invalid).is_err());
+            assert!(reliability_ratio("phi_coefficient", 1.0, invalid).is_err());
+            let grid = ndarray::Array3::from_elem((2, 2, 2), invalid);
+            assert!(matches!(
+                estimate_g_theory_pir(grid.view(), GTheoryDesign::Crossed),
+                Err(GTheoryError::UndefinedReliability { .. })
+            ));
+        }
+    }
+
     use ndarray::Array3;
     use salib_core::RngState;
 

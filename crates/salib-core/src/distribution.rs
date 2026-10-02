@@ -196,7 +196,7 @@ fn weibull_quantile(shape: f64, scale: f64, u: f64) -> f64 {
     if u >= 1.0 {
         return f64::INFINITY;
     }
-    scale * (-(1.0 - u).ln()).powf(1.0 / shape)
+    scale * (-(-u).ln_1p()).powf(1.0 / shape)
 }
 
 fn exponential_quantile(lambda: f64, u: f64) -> f64 {
@@ -204,7 +204,7 @@ fn exponential_quantile(lambda: f64, u: f64) -> f64 {
     if u >= 1.0 {
         return f64::INFINITY;
     }
-    -((1.0 - u).ln()) / lambda
+    -(-u).ln_1p() / lambda
 }
 
 fn bernoulli_quantile(p: f64, u: f64) -> f64 {
@@ -286,6 +286,18 @@ fn gamma_quantile(shape: f64, scale: f64, u: f64) -> f64 {
     clippy::cast_precision_loss
 )]
 mod tests {
+
+    #[test]
+    fn phase3_small_probability_quantiles_preserve_precision() {
+        for u in [1e-16, 1e-17] {
+            for value in [weibull_quantile(1.0, 1.0, u), exponential_quantile(1.0, u)] {
+                assert!(value.is_finite());
+                assert!(value > 0.0);
+                assert!((value / u - 1.0).abs() < 1e-15);
+            }
+        }
+    }
+
     use super::*;
 
     // Numerical-tolerance helper for floating-point assertions.

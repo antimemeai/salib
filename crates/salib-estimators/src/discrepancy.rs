@@ -70,7 +70,7 @@ impl fmt::Display for DiscrepancyResult {
 /// values in `[0, 1]`).
 ///
 /// Returns `Err` if the matrix is empty or any value is outside
-/// `[0, 1]`.
+/// `[0, 1]`. Arithmetic overflow can produce NaN discrepancy values.
 #[allow(clippy::cast_precision_loss)]
 pub fn compute_discrepancy(
     sample: ArrayView2<'_, f64>,
@@ -133,6 +133,9 @@ fn centered_discrepancy(sample: ArrayView2<'_, f64>, n: usize, d: usize, n_f: f6
     }
 
     let cd_sq = term1 - (2.0 / n_f) * sum2 + (1.0 / (n_f * n_f)) * sum3;
+    if cd_sq.is_nan() {
+        return cd_sq;
+    }
     cd_sq.max(0.0).sqrt()
 }
 
@@ -158,6 +161,9 @@ fn wrap_around_discrepancy(sample: ArrayView2<'_, f64>, n: usize, d: usize, n_f:
     }
 
     let wd_sq = term1 + (1.0 / (n_f * n_f)) * sum;
+    if wd_sq.is_nan() {
+        return wd_sq;
+    }
     wd_sq.max(0.0).sqrt()
 }
 
@@ -194,6 +200,9 @@ fn l2_star_discrepancy(sample: ArrayView2<'_, f64>, n: usize, d: usize, n_f: f64
     }
 
     let l2_sq = term1 - coeff2 * sum2 + (1.0 / (n_f * n_f)) * sum3;
+    if l2_sq.is_nan() {
+        return l2_sq;
+    }
     l2_sq.max(0.0).sqrt()
 }
 
@@ -241,11 +250,29 @@ fn modified_discrepancy(sample: ArrayView2<'_, f64>, n: usize, d: usize, n_f: f6
     }
 
     let md_sq = term1 - (2.0 / n_f) * sum2 + (1.0 / (n_f * n_f)) * sum3;
+    if md_sq.is_nan() {
+        return md_sq;
+    }
     md_sq.max(0.0).sqrt()
 }
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn phase3_overflow_discrepancy_preserves_nan() {
+        let sample = ndarray::Array2::from_elem((1, 10_000), 0.0);
+        let result = compute_discrepancy(sample.view()).unwrap();
+        assert!(
+            result.centered.is_nan(),
+            "overflow must not report perfect space filling"
+        );
+        assert!(result.wrap_around.is_nan());
+        let sample = ndarray::Array2::from_elem((1, 2_000), 0.5);
+        let result = compute_discrepancy(sample.view()).unwrap();
+        assert!(result.modified.is_nan());
+    }
+
     use super::*;
     use ndarray::array;
 

@@ -183,12 +183,13 @@ pub fn estimate_regression_indices(
 
     // Per-column variance checks.
     let var_y = sample_variance(y);
-    if var_y < 1e-15 {
+    if !var_y.is_finite() || var_y < 1e-15 {
         return Err(RegressionError::ZeroVariance);
     }
     for j in 0..d {
         let col: Vec<f64> = (0..n).map(|k| x[[k, j]]).collect();
-        if sample_variance(&col) < 1e-15 {
+        let variance = sample_variance(&col);
+        if !variance.is_finite() || variance < 1e-15 {
             return Err(RegressionError::ZeroFactorVariance { factor: j });
         }
     }
@@ -406,6 +407,26 @@ fn ordinal_ranks_f64(data: &[f64]) -> Vec<f64> {
 #[cfg(test)]
 #[allow(clippy::float_cmp, clippy::approx_constant)]
 mod tests {
+
+    #[test]
+    fn phase3_regression_rejects_nonfinite_variance() {
+        let mut x = ndarray::array![[0.0], [1.0], [2.0], [3.0]];
+        let y = [0.0, 1.0, 2.0, 3.0];
+        for invalid in [f64::NAN, f64::INFINITY] {
+            let mut invalid_y = y;
+            invalid_y[0] = invalid;
+            assert!(matches!(
+                estimate_regression_indices(x.view(), &invalid_y),
+                Err(RegressionError::ZeroVariance)
+            ));
+            x[[0, 0]] = invalid;
+            assert!(matches!(
+                estimate_regression_indices(x.view(), &y),
+                Err(RegressionError::ZeroFactorVariance { factor: 0 })
+            ));
+        }
+    }
+
     use super::*;
 
     fn synthetic_x(n: usize, d: usize) -> Array2<f64> {

@@ -329,6 +329,32 @@ where
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
+
+    #[test]
+    fn phase3_bootstrap_rejects_all_invalid_alpha_before_resampling() {
+        let x = ndarray::array![[0.0], [1.0]];
+        for alpha in [
+            0.0,
+            1.0,
+            -0.1,
+            2.0,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
+            let mut rng = fresh_rng();
+            let before = rng.clone();
+            let result = bootstrap_given_data(x.view(), &[0.0, 1.0], 4, alpha, &mut rng, |_, _| {
+                panic!("invalid alpha reached estimator")
+            });
+            assert!(matches!(
+                result,
+                Err(BootstrapGivenDataError::OutOfRangeAlpha { .. })
+            ));
+            assert_eq!(rng, before);
+        }
+    }
+
     use super::*;
     use crate::given_data_sobol::estimate_given_data_sobol;
     use ndarray::Array2;

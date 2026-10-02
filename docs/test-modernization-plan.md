@@ -143,7 +143,7 @@ Install Kani, then add harnesses for the highest-value targets from `docs/analys
 
 **Test pattern**: `cargo kani` on individual harness files, not workspace-wide.
 
-## Phase 6 — Stateright models (optional, after 1-5)
+## Phase 6 — Stateright models (required — run on tailscale server, not local)
 
 Four bounded models from the analysis, in priority order:
 

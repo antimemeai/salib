@@ -103,6 +103,8 @@ impl fmt::Display for OwenIndices {
     }
 }
 
+/// Nonfinite variance or numerators yield zero indices; nonfinite total variance is reported as zero.
+///
 /// Estimate first-order Sobol' indices via Owen 2013 Correlation 2.
 ///
 /// Pure function; no RNG.
@@ -152,7 +154,7 @@ where
             .map(|j| (fa[j] - fac[i][j]) * (fba[i][j] - fb[j]))
             .collect();
         let num = tree_sum(&terms) / n_f;
-        let s_i = if total_variance > 1e-15 {
+        let s_i = if total_variance.is_finite() && total_variance > 1e-15 && num.is_finite() {
             num / total_variance
         } else {
             0.0
@@ -162,7 +164,11 @@ where
 
     OwenIndices {
         first_order,
-        total_variance,
+        total_variance: if total_variance.is_finite() {
+            total_variance
+        } else {
+            0.0
+        },
         second_order: None,
     }
 }
@@ -185,6 +191,26 @@ mod tests {
     use super::*;
     use salib_core::RngState;
     use salib_samplers::{build_owen_matrix, LhsSampler};
+
+    #[test]
+    fn phase3_nonfinite_variance_yields_zero_indices() {
+        let mut rng = RngState::from_seed([0x42; 32]);
+        let matrix = build_owen_matrix(&LhsSampler::classic(6), 4, &mut rng).unwrap();
+        for invalid in [f64::NAN, f64::INFINITY] {
+            let result = estimate_owen(&matrix, |_| invalid);
+            assert!(result.total_variance.is_finite());
+            for value in result.first_order {
+                assert!(value.is_finite());
+                assert!(value.abs() < 1e-12);
+            }
+        }
+        // Finite outputs with overflowing variance: infinity must not be divided into.
+        let result = estimate_owen(&matrix, |x| if x[0] < 0.5 { -1e200 } else { 1e200 });
+        for value in result.first_order {
+            assert!(value.is_finite());
+            assert!(value.abs() < 1e-12);
+        }
+    }
 
     #[test]
     fn output_length_matches_d() {
