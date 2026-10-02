@@ -6,7 +6,7 @@
     clippy::cast_precision_loss
 )]
 
-//! TCK integration tests for RS-HDMR via PCE decomposition.
+//! RS-HDMR integration tests via PCE decomposition.
 
 use ndarray::Array2;
 use salib_core::RngState;

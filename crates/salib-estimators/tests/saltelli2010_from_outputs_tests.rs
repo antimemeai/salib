@@ -1,4 +1,4 @@
-//! TCK: Saltelli2010 estimation from pre-computed outputs.
+//! Saltelli2010 estimation from pre-computed outputs.
 //!
 //! Feature: saltelli2010_from_outputs.feature
 

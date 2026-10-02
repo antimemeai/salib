@@ -1,7 +1,7 @@
-//! TCK harness for grouped-factor Morris support.
+//! Grouped-factor Morris tests.
 //!
 //! Maps Gherkin scenarios from
-//! `tck/salib/grouped-factors/features/grouped_factors.feature`.
+//! Validates that grouped Morris with singleton groups equals ungrouped Morris.
 
 #![allow(
     clippy::unwrap_used,
