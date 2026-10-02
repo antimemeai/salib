@@ -25,6 +25,8 @@
 pub mod fast;
 pub mod harmonic_budget;
 pub mod iman_conover;
+#[cfg(kani)]
+pub mod kani;
 pub mod lhs;
 pub mod morris;
 pub mod owen_matrix;

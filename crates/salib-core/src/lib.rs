@@ -27,6 +27,8 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod distribution;
+#[cfg(kani)]
+pub mod kani;
 pub mod problem;
 pub mod reduce;
 pub mod rng;

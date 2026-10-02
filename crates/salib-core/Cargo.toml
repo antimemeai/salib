@@ -39,5 +39,7 @@ serde_json = "1"
 # `BuildError` — fallible `ProblemBuilder::build`.
 thiserror = "2"
 
+# Kani 0.68.0 injects its proof API; the `kani` crate is not published.
+
 [lints]
 workspace = true

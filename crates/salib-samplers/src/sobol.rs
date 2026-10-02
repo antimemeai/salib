@@ -69,7 +69,7 @@ include!(concat!(env!("OUT_DIR"), "/joe_kuo_d6_data.rs"));
 /// 32-bit resolution for the integer state. `2^32` distinct points
 /// per dim per Sobol' sequence; sufficient for any realistic SA
 /// workload (typical N ≤ 2^20 = ~1M).
-const RES: u32 = 32;
+pub(crate) const RES: u32 = 32;
 
 /// Selects which vendored Joe-Kuo dimension table to use. Closed
 /// enum, `#[non_exhaustive]`. Future variants may include `Extended`

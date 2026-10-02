@@ -33,6 +33,8 @@ pub mod given_data_sobol;
 pub mod hdmr;
 pub mod janon;
 pub mod jansen;
+#[cfg(kani)]
+pub mod kani;
 pub mod morris;
 pub mod owen;
 pub mod pawn;
