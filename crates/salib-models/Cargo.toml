@@ -1,0 +1,21 @@
+[package]
+name = "salib-models"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Stateright model checking harnesses for salib invariants."
+publish = false
+
+[dependencies]
+# Stateright has no 2.x release; the server binary needs the checker at runtime.
+stateright = "0.31"
+salib-core = { path = "../salib-core" }
+salib-samplers = { path = "../salib-samplers" }
+salib-estimators = { path = "../salib-estimators" }
+ndarray = "0.16"
+rand = { version = "0.9", default-features = false }
+
+[lints]
+workspace = true
