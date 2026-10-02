@@ -188,3 +188,14 @@ fn invalid_alpha_propagates_through_e2e() {
     let err = estimate_qosa(x.view(), &y, 1.5).unwrap_err();
     assert!(matches!(err, QosaError::InvalidAlpha { .. }));
 }
+
+#[test]
+fn qosa_independent_factors_have_small_indices() {
+    let x = lhs_inputs(1024, 3, 0.0, 1.0);
+    let y: Vec<f64> = x.column(0).to_vec();
+    let result = estimate_qosa(x.view(), &y, 0.5).expect("QOSA fit");
+    assert!(result.s.iter().all(|v| v.is_finite()));
+    assert!(result.s[0] > 0.3, "determining factor: {:?}", result.s);
+    assert!(result.s[1] < 0.1, "independent factor 1: {:?}", result.s);
+    assert!(result.s[2] < 0.1, "independent factor 2: {:?}", result.s);
+}

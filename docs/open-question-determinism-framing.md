@@ -45,12 +45,10 @@ Do not remove the property — **re-shelve it**:
    *salib's computation*, and it sits below the statistical (Monte Carlo) error
    of any estimate. Document that two estimates are comparable on statistical
    grounds, never on bit-identity grounds.
-3. In the TCK, classify `tree_fold_invariance` / `multi_stream_chacha` as the
+3. In the test suite, classify `tree_fold` / `rng_determinism` tests as the
    *reproducibility / regression* tier — distinct from the *correctness vs.
    literature* tier (`salib-validation` analytic indices). Both are legitimate;
-   they answer different questions. (Ties into the org-wide TCK
-   conformance-tier ADR — `antimeme-ai/.github`,
-   `docs/adr/0001-tck-conformance-tiers.md`.)
+   they answer different questions.
 
 ## Prompt for the pick-up session
 

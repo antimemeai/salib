@@ -80,3 +80,30 @@ fn g_theory_bootstrap_is_deterministic_and_contains_point_estimate() {
             && a.phi_coefficient <= a.phi_coefficient_ci_high.unwrap()
     );
 }
+
+#[test]
+fn g_theory_bootstrap_records_all_component_intervals_and_metadata() {
+    let mut rng = RngState::from_seed([0x44; 32]);
+    let r = estimate_g_theory_pir_with_bootstrap(
+        grid().view(),
+        GTheoryDesign::Crossed,
+        128,
+        0.05,
+        &mut rng,
+    )
+    .expect("g-theory bootstrap estimate");
+    assert_eq!(
+        r.variance_component_ci_low.as_ref().expect("CI lows").len(),
+        7
+    );
+    assert_eq!(
+        r.variance_component_ci_high
+            .as_ref()
+            .expect("CI highs")
+            .len(),
+        7
+    );
+    assert_eq!(r.bootstrap_iterations, Some(128));
+    assert_eq!(r.bootstrap_alpha, Some(0.05));
+    assert!(r.bootstrap_skipped.is_some());
+}

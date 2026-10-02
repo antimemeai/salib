@@ -214,3 +214,23 @@ fn pce_ishigami_is_deterministic() {
     assert_eq!(sa.first_order, sb.first_order);
     assert_eq!(sa.total_order, sb.total_order);
 }
+
+#[test]
+fn pce_ishigami_recovers_all_six_indices_within_one_percent() {
+    let (x, y) = build_pce_inputs();
+    let pce =
+        fit_full_pce(x.view(), &y, &[PolynomialFamily::Legendre; 3], MAX_DEGREE).expect("PCE fit");
+    let sobol = sobol_indices_from_pce(&pce).expect("Sobol from PCE");
+    for (actual, expected) in [
+        (&sobol.first_order, [0.3139, 0.4424, 0.0]),
+        (&sobol.total_order, [0.5576, 0.4424, 0.2436]),
+    ] {
+        assert_eq!(actual.len(), expected.len());
+        for (&got, want) in actual.iter().zip(expected) {
+            assert!(
+                got.is_finite() && (got - want).abs() < 0.01,
+                "got {got}, expected {want} within 0.01"
+            );
+        }
+    }
+}

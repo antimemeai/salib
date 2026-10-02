@@ -248,3 +248,24 @@ fn anova_inferential_statistics_match_ratified_denominators() {
     assert!(three.f_data_brittleness_inference.is_none());
     assert!(three.p_data_brittleness_inference.is_none());
 }
+
+#[test]
+fn anova_three_way_bootstrap_has_intervals_for_all_eight_fractions() {
+    let mut rng = RngState::from_seed([0x22; 32]);
+    let est = estimate_anova_three_way_with_bootstrap(three_way_grid().view(), 128, 0.05, &mut rng)
+        .expect("three-way bootstrap estimate");
+    assert_eq!(
+        est.variance_fraction_ci_low
+            .as_ref()
+            .expect("CI lows")
+            .len(),
+        8
+    );
+    assert_eq!(
+        est.variance_fraction_ci_high
+            .as_ref()
+            .expect("CI highs")
+            .len(),
+        8
+    );
+}

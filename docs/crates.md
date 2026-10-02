@@ -1,6 +1,6 @@
 # Crate Map
 
-salib is a workspace of nine crates. The `salib` facade re-exports the most common types and functions; depend on individual crates for finer control over compile times and dependencies.
+salib is a workspace of eight crates. The `salib` facade re-exports the most common types and functions; depend on individual crates for finer control over compile times and dependencies.
 
 ---
 
@@ -22,7 +22,6 @@ salib  (facade)
 │   └── salib-estimators
 ├── salib-validation     test functions (Ishigami, Sobol' G, Morris)  [optional: "validation"]
 │   └── salib-core
-├── salib-tck            Gherkin test harness          [dev only]
 └── salib-cli            CLI binary                    [separate install]
     ├── salib-core
     ├── salib-samplers
@@ -111,10 +110,6 @@ Analytic test functions with closed-form sensitivity indices. Optional — enabl
 | Sobol' G | $d$ | $S_i$, $S_{Ti}$ |
 | Morris | $d$ | $\mu^*$, $\sigma$ classification |
 | Linear | $d$ | exact SRC |
-
-### salib-tck
-
-Internal test-contract-kit. Gherkin-based integration tests. Not published for external use.
 
 ### salib-cli
 

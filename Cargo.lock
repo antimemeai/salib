@@ -1801,7 +1801,6 @@ dependencies = [
  "rand 0.9.5",
  "rand_chacha 0.9.0",
  "rayon",
- "salib-tck",
  "serde",
  "serde_json",
  "sha2",
@@ -1821,7 +1820,6 @@ dependencies = [
  "salib-core",
  "salib-samplers",
  "salib-surrogate",
- "salib-tck",
  "salib-validation",
  "serde",
  "serde_json",
@@ -1838,7 +1836,6 @@ dependencies = [
  "rand_chacha 0.9.0",
  "salib-core",
  "salib-estimators",
- "salib-tck",
  "serde",
  "serde_json",
  "sha2",
@@ -1852,7 +1849,6 @@ dependencies = [
  "rand 0.9.5",
  "rand_chacha 0.9.0",
  "salib-core",
- "salib-tck",
  "salib-validation",
  "serde",
  "serde_json",
@@ -1868,7 +1864,6 @@ dependencies = [
  "salib-core",
  "salib-estimators",
  "salib-samplers",
- "salib-tck",
  "salib-validation",
  "serde",
  "serde_json",
@@ -1876,15 +1871,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "salib-tck"
-version = "0.2.0"
-
-[[package]]
 name = "salib-validation"
 version = "0.2.0"
 dependencies = [
  "salib-core",
- "salib-tck",
  "serde",
  "serde_json",
 ]

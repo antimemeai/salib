@@ -28,6 +28,7 @@
     clippy::unreadable_literal,
     clippy::items_after_statements,
     clippy::expect_used,
+    clippy::unwrap_used,
     clippy::similar_names
 )]
 
@@ -60,7 +61,10 @@ fn run_ishigami_at_n(n: usize) -> salib_estimators::SobolIndices {
         ];
         ishigami::ishigami(&mapped)
     };
-    estimate_saltelli2010(&matrix, model)
+    let estimate = estimate_saltelli2010(&matrix, model);
+    assert!(estimate.first_order.iter().all(|v| v.is_finite()));
+    assert!(estimate.total_order.iter().all(|v| v.is_finite()));
+    estimate
 }
 
 // ── Artifact 1+2: canonical Ishigami + model-free identity ──────────
@@ -69,6 +73,8 @@ fn run_ishigami_at_n(n: usize) -> salib_estimators::SobolIndices {
 fn ishigami_canonical_recovers_published_values_within_mc_tolerance() {
     let estimate = run_ishigami_at_n(8192);
     let analytic: SobolIndicesAnalytic = ishigami::analytic_indices(7.0, 0.1);
+    assert!(analytic.first_order.iter().all(|v| v.is_finite()));
+    assert!(analytic.total_order.iter().all(|v| v.is_finite()));
 
     // MC-noise tolerance at N=8192 is roughly k/sqrt(N) ≈ 0.022
     // for a 2-sigma allowance. SALib reports ~0.018 conf for S and
@@ -90,6 +96,14 @@ fn ishigami_canonical_recovers_published_values_within_mc_tolerance() {
             (got - want).abs() < TOL,
             "S_T_{i}: got {got:.4}, want {want:.4} (analytic) within {TOL}"
         );
+    }
+
+    // Published rounded values formerly checked by the Gherkin harness.
+    for i in 0..3 {
+        let published_s = [0.3139, 0.4424, 0.0];
+        let published_st = [0.5576, 0.4424, 0.2436];
+        assert!((estimate.first_order[i] - published_s[i]).abs() < TOL);
+        assert!((estimate.total_order[i] - published_st[i]).abs() < TOL);
     }
 
     // The Ishigami canary: S_3 should be near 0 (analytic = 0).
@@ -129,7 +143,10 @@ fn ishigami_first_order_sum_at_most_one_within_mc_tolerance() {
     // Σ S_i ≤ 1 by Sobol' decomposition (independent inputs).
     let estimate = run_ishigami_at_n(8192);
     let sum: f64 = estimate.first_order.iter().sum();
-    assert!(sum <= 1.0 + 0.05, "Σ S_i = {sum} (more than 1.05)");
+    assert!(
+        sum.is_finite() && sum <= 1.0 + 0.05,
+        "Σ S_i = {sum} (more than 1.05)"
+    );
 }
 
 // ── Artifact 3: SALib differential ──────────────────────────────────
@@ -193,6 +210,7 @@ fn ishigami_estimator_error_decays_with_n() {
 
     let analytic = ishigami::analytic_indices(7.0, 0.1);
     let s2_analytic = analytic.first_order[1]; // 0.4424
+    assert!(s2_analytic.is_finite());
 
     let n_values = [4096usize, 16384, 65536];
     let errors: Vec<f64> = n_values
@@ -202,6 +220,8 @@ fn ishigami_estimator_error_decays_with_n() {
             (est.first_order[1] - s2_analytic).abs()
         })
         .collect();
+
+    assert!(errors.iter().all(|v| v.is_finite()));
 
     // Three N values, should see decreasing error trend on average.
     // We require the *largest N* error to be strictly below the

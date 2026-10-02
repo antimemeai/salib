@@ -155,3 +155,16 @@ fn ishigami_shapley_is_deterministic() {
     assert_eq!(a.sh, b.sh);
     assert_eq!(a.var_y, b.var_y);
 }
+
+#[test]
+fn shapley_indices_sum_to_var_y_at_telescoping_precision() {
+    let result = run_at_budget(2000, 4000);
+    assert!(result.sh.iter().all(|v| v.is_finite()));
+    let sum: f64 = result.sh.iter().sum();
+    assert!(sum.is_finite() && result.var_y.is_finite());
+    assert!(
+        (sum - result.var_y).abs() < 1e-9,
+        "sum = {sum}, Var(Y) = {}",
+        result.var_y
+    );
+}

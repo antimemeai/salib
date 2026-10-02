@@ -245,3 +245,34 @@ fn ic_e2e_pipeline_is_deterministic() {
         }
     }
 }
+
+fn uniform01_samples(n: usize, d: usize) -> Array2<f64> {
+    use rand::RngCore;
+    let mut chacha = RngState::from_seed(FIXTURE_SEED).into_chacha();
+    let u32_norm = 1.0 / (f64::from(u32::MAX) + 1.0);
+    Array2::from_shape_fn((n, d), |_| f64::from(chacha.next_u32()) * u32_norm)
+}
+
+#[test]
+fn ic_identity_target_keeps_uniform_inputs_near_independent() {
+    let x = uniform01_samples(2000, 3);
+    let mut rng = RngState::from_seed([9; 32]);
+    let out = iman_conover_transform(&x, &Array2::eye(3), &mut rng).expect("IC transform");
+    for i in 0..3 {
+        for j in (i + 1)..3 {
+            let rho = pearson(&out, i, j);
+            assert!(rho.is_finite() && rho.abs() < 0.1, "rho({i},{j}) = {rho}");
+        }
+    }
+}
+
+#[test]
+fn ic_uniform_input_transform_is_deterministic() {
+    let x = uniform01_samples(512, 3);
+    let r = array![[1.0, 0.4, 0.2], [0.4, 1.0, 0.1], [0.2, 0.1, 1.0]];
+    let mut rng_a = RngState::from_seed([10; 32]);
+    let mut rng_b = RngState::from_seed([10; 32]);
+    let a = iman_conover_transform(&x, &r, &mut rng_a).expect("IC transform a");
+    let b = iman_conover_transform(&x, &r, &mut rng_b).expect("IC transform b");
+    assert_eq!(a, b);
+}

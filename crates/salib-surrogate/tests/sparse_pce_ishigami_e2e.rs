@@ -177,3 +177,66 @@ fn sparse_pce_is_deterministic_across_runs() {
         assert_eq!(a.total_order, b.total_order, "{solver:?}: S_T differs");
     }
 }
+
+#[test]
+fn sparse_pce_identifies_active_factors_of_additive_model() {
+    use salib_samplers::LhsSampler;
+    let mut rng = RngState::from_seed(FIXTURE_SEED);
+    let x = LhsSampler::classic(10)
+        .unit_sample(512, &mut rng)
+        .mapv(|u| 2.0 * u - 1.0);
+    let y: Vec<f64> = x
+        .rows()
+        .into_iter()
+        .map(|row| row[0] + 0.5 * row[2] + 2.0 * row[4])
+        .collect();
+    let (pce, _) = fit_sparse_pce(
+        x.view(),
+        &y,
+        &[PolynomialFamily::Legendre; 10],
+        4,
+        TruncationScheme::TotalDegree,
+        SparseSolver::Omp,
+        None,
+    )
+    .expect("additive sparse PCE fit");
+    let sobol = sobol_indices_from_pce(&pce).expect("Sobol from PCE");
+    assert_eq!(sobol.first_order.len(), 10);
+    for (i, &s) in sobol.first_order.iter().enumerate() {
+        assert!(s.is_finite(), "factor {i}: S = {s}");
+        if matches!(i, 0 | 2 | 4) {
+            assert!(s >= 0.01, "active factor {i}: S = {s}");
+        } else {
+            assert!(s <= 0.01, "inactive factor {i}: S = {s}");
+        }
+    }
+    assert!(sobol.first_order[4] > sobol.first_order[0]);
+    assert!(sobol.first_order[0] > sobol.first_order[2]);
+}
+
+#[test]
+fn hyperbolic_truncation_reduces_ten_factor_basis_size() {
+    use salib_surrogate::{enumerate_hyperbolic, multi_index::total_degree_basis_size};
+    let basis = enumerate_hyperbolic(10, 4, 0.5).expect("hyperbolic basis");
+    assert!(basis.len() <= 200, "basis size = {}", basis.len());
+    assert_eq!(total_degree_basis_size(10, 4), 1001);
+}
+
+#[test]
+fn sparse_pce_coefficients_are_deterministic() {
+    let (x, y) = build_inputs();
+    let fit = || {
+        fit_sparse_pce(
+            x.view(),
+            &y,
+            &[PolynomialFamily::Legendre; 3],
+            MAX_DEGREE,
+            TruncationScheme::Hyperbolic { q: 0.75 },
+            SparseSolver::Omp,
+            None,
+        )
+        .expect("sparse PCE fit")
+        .0
+    };
+    assert_eq!(fit().coefficients, fit().coefficients);
+}

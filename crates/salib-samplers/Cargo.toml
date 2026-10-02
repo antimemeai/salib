@@ -36,8 +36,6 @@ serde_json = "1"
 thiserror = "2"
 
 [dev-dependencies]
-# Outer Gherkin TCK harness.
-salib-tck = { version = "0.2.0", path = "../salib-tck" }
 salib-estimators = { version = "0.2.0", path = "../salib-estimators" }
 
 [features]
