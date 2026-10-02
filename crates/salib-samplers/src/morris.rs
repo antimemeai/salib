@@ -38,6 +38,8 @@
 //!   Conceição 2012). future work.
 //! - **Radial Morris** (per Saltelli's variant). Deferred.
 
+use std::num::NonZeroUsize;
+
 use ndarray::{Array2, Array3};
 use rand::RngCore;
 use salib_core::{Group, RngState};
@@ -114,9 +116,7 @@ pub fn build_morris_trajectories(
     levels: u32,
     rng: &mut RngState,
 ) -> Result<MorrisTrajectories, MorrisError> {
-    if r == 0 {
-        return Err(MorrisError::ZeroR);
-    }
+    let r = NonZeroUsize::new(r).ok_or(MorrisError::ZeroR)?.get();
     if d == 0 {
         return Err(MorrisError::ZeroD);
     }
@@ -239,9 +239,7 @@ pub fn build_grouped_morris_trajectories(
     levels: u32,
     rng: &mut RngState,
 ) -> Result<MorrisTrajectories, MorrisError> {
-    if r == 0 {
-        return Err(MorrisError::ZeroR);
-    }
+    let r = NonZeroUsize::new(r).ok_or(MorrisError::ZeroR)?.get();
     if d == 0 {
         return Err(MorrisError::ZeroD);
     }

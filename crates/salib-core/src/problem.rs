@@ -27,6 +27,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::distribution::Distribution;
+use crate::types::{FiniteF64, Probability};
 
 /// The role a factor plays in the experiment. Closed enum,
 /// `#[non_exhaustive]`. Continuous is the default for typical SA
@@ -299,43 +300,40 @@ impl ProblemBuilder {
 /// Internal: per-variant parameter validation. Returns `Err(reason)`
 /// on bad params; called by `ProblemBuilder::build`.
 ///
-/// **`NaN`-safety note.** The checks below are written as `!(a < b)` /
-/// `!(x > 0.0)` deliberately. The simplified forms (`a >= b`, `x <= 0.0`)
-/// would let `NaN` slip through — `NaN >= b` is `false` in `IEEE-754`,
-/// so `if a >= b` would *not* error on `NaN` parameters. The negated
-/// form errors on `NaN` as well (`!(NaN < b)` is `!false` = `true`).
-/// Rejecting `NaN` params at build time is required: a `Distribution`
-/// carrying a `NaN` parameter would produce `NaN` samples in
-/// `quantile`, polluting every downstream estimator.
-#[allow(clippy::neg_cmp_op_on_partial_ord, clippy::nonminimal_bool)]
+/// Each floating parameter is converted to a checked finite value before
+/// applying the distribution's range constraints.
 fn validate_distribution(d: &Distribution) -> Result<(), String> {
+    let finite = |name: &str, value| FiniteF64::new(value).map_err(|err| format!("{name}: {err}"));
     match *d {
         Distribution::Uniform { lo, hi } => {
-            if !lo.is_finite() || !hi.is_finite() || !(lo < hi) {
+            let lo = finite("Uniform: lo", lo)?.get();
+            let hi = finite("Uniform: hi", hi)?.get();
+            if lo >= hi {
                 return Err(format!("Uniform: lo ({lo}) must be < hi ({hi})"));
             }
         }
         Distribution::Normal { mu, sigma } => {
-            if !mu.is_finite() {
-                return Err(format!("Normal: mu ({mu}) must be finite"));
-            }
-            if !sigma.is_finite() || !(sigma > 0.0) {
+            let _mu = finite("Normal: mu", mu)?;
+            let sigma = finite("Normal: sigma", sigma)?.get();
+            if sigma <= 0.0 {
                 return Err(format!("Normal: sigma ({sigma}) must be > 0"));
             }
         }
         Distribution::LogNormal { mu_log, sigma_log } => {
-            if !mu_log.is_finite() {
-                return Err(format!("LogNormal: mu_log ({mu_log}) must be finite"));
-            }
-            if !sigma_log.is_finite() || !(sigma_log > 0.0) {
+            let _mu_log = finite("LogNormal: mu_log", mu_log)?;
+            let sigma_log = finite("LogNormal: sigma_log", sigma_log)?.get();
+            if sigma_log <= 0.0 {
                 return Err(format!("LogNormal: sigma_log ({sigma_log}) must be > 0"));
             }
         }
         Distribution::Triangular { lo, mode, hi } => {
-            if !lo.is_finite() || !hi.is_finite() || !(lo < hi) {
+            let lo = finite("Triangular: lo", lo)?.get();
+            let mode = finite("Triangular: mode", mode)?.get();
+            let hi = finite("Triangular: hi", hi)?.get();
+            if lo >= hi {
                 return Err(format!("Triangular: lo ({lo}) must be < hi ({hi})"));
             }
-            if !mode.is_finite() || !(lo <= mode && mode <= hi) {
+            if mode < lo || mode > hi {
                 return Err(format!(
                     "Triangular: mode ({mode}) must be in [lo ({lo}), hi ({hi})]"
                 ));
@@ -347,44 +345,54 @@ fn validate_distribution(d: &Distribution) -> Result<(), String> {
             lo,
             hi,
         } => {
-            if !alpha.is_finite() || !(alpha > 0.0) {
+            // Beta shapes are positive finite values, not probabilities;
+            // shapes >= 1 are valid and must remain accepted.
+            let alpha = finite("Beta: alpha", alpha)?.get();
+            let beta = finite("Beta: beta", beta)?.get();
+            let lo = finite("Beta: lo", lo)?.get();
+            let hi = finite("Beta: hi", hi)?.get();
+            if alpha <= 0.0 {
                 return Err(format!("Beta: alpha ({alpha}) must be > 0"));
             }
-            if !beta.is_finite() || !(beta > 0.0) {
+            if beta <= 0.0 {
                 return Err(format!("Beta: beta ({beta}) must be > 0"));
             }
-            if !lo.is_finite() || !hi.is_finite() || !(lo < hi) {
+            if lo >= hi {
                 return Err(format!("Beta: lo ({lo}) must be < hi ({hi})"));
             }
         }
         Distribution::Gamma { shape, scale } => {
-            if !shape.is_finite() || !(shape > 0.0) {
+            let shape = finite("Gamma: shape", shape)?.get();
+            let scale = finite("Gamma: scale", scale)?.get();
+            if shape <= 0.0 {
                 return Err(format!("Gamma: shape ({shape}) must be > 0"));
             }
-            if !scale.is_finite() || !(scale > 0.0) {
+            if scale <= 0.0 {
                 return Err(format!("Gamma: scale ({scale}) must be > 0"));
             }
         }
         Distribution::Weibull { shape, scale } => {
-            if !shape.is_finite() || !(shape > 0.0) {
+            let shape = finite("Weibull: shape", shape)?.get();
+            let scale = finite("Weibull: scale", scale)?.get();
+            if shape <= 0.0 {
                 return Err(format!("Weibull: shape ({shape}) must be > 0"));
             }
-            if !scale.is_finite() || !(scale > 0.0) {
+            if scale <= 0.0 {
                 return Err(format!("Weibull: scale ({scale}) must be > 0"));
             }
         }
         Distribution::Exponential { lambda } => {
-            if !lambda.is_finite() || !(lambda > 0.0) {
+            let lambda = finite("Exponential: lambda", lambda)?.get();
+            if lambda <= 0.0 {
                 return Err(format!("Exponential: lambda ({lambda}) must be > 0"));
             }
         }
         Distribution::Bernoulli { p } => {
-            if !p.is_finite() || !(0.0..=1.0).contains(&p) {
-                return Err(format!("Bernoulli: p ({p}) must be in [0, 1]"));
-            }
+            let p = finite("Bernoulli: p", p)?.get();
+            Probability::new(p).map_err(|err| format!("Bernoulli: p: {err}"))?;
         }
         Distribution::DiscreteUniform { lo, hi } => {
-            if !(lo <= hi) {
+            if lo > hi {
                 return Err(format!("DiscreteUniform: lo ({lo}) must be <= hi ({hi})"));
             }
         }
@@ -396,6 +404,70 @@ fn validate_distribution(d: &Distribution) -> Result<(), String> {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bernoulli_requires_open_probability() {
+        for p in [
+            0.0,
+            -0.0,
+            1.0,
+            -0.1,
+            1.1,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
+            let err = ProblemBuilder::new()
+                .factor("coin", Distribution::Bernoulli { p })
+                .build()
+                .unwrap_err();
+            assert!(matches!(err, BuildError::InvalidDistribution { .. }));
+        }
+        for p in [
+            f64::from_bits(1),
+            0.5,
+            f64::from_bits(1.0_f64.to_bits() - 1),
+        ] {
+            assert!(ProblemBuilder::new()
+                .factor("coin", Distribution::Bernoulli { p })
+                .build()
+                .is_ok());
+        }
+    }
+
+    #[test]
+    fn beta_shapes_are_positive_finite_not_probabilities() {
+        for (alpha, beta) in [(0.5, 0.5), (1.0, 1.0), (2.0, 5.0)] {
+            assert!(ProblemBuilder::new()
+                .factor(
+                    "beta",
+                    Distribution::Beta {
+                        alpha,
+                        beta,
+                        lo: 0.0,
+                        hi: 1.0
+                    }
+                )
+                .build()
+                .is_ok());
+        }
+        for bad in [0.0, -0.1, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for (alpha, beta) in [(bad, 2.0), (2.0, bad)] {
+                assert!(ProblemBuilder::new()
+                    .factor(
+                        "beta",
+                        Distribution::Beta {
+                            alpha,
+                            beta,
+                            lo: 0.0,
+                            hi: 1.0
+                        }
+                    )
+                    .build()
+                    .is_err());
+            }
+        }
+    }
 
     #[test]
     fn problem_rejects_all_nonfinite_parameters() {

@@ -44,6 +44,8 @@
 
 #![allow(clippy::many_single_char_names, clippy::similar_names)]
 
+use std::num::NonZeroUsize;
+
 use ndarray::Array2;
 use salib_core::RngState;
 
@@ -114,9 +116,7 @@ pub fn build_owen_matrix(
     n: usize,
     rng: &mut RngState,
 ) -> Result<OwenMatrix, OwenMatrixError> {
-    if n == 0 {
-        return Err(OwenMatrixError::ZeroN);
-    }
+    let n = NonZeroUsize::new(n).ok_or(OwenMatrixError::ZeroN)?.get();
     let total_dim = sampler.dim();
     if !total_dim.is_multiple_of(3) {
         return Err(OwenMatrixError::NotDivisibleByThree { dim: total_dim });

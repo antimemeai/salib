@@ -43,8 +43,10 @@
     clippy::expect_used
 )]
 
+use std::num::NonZeroUsize;
+
 use rand::RngCore;
-use salib_core::{tree_sum, RngState};
+use salib_core::{tree_sum, Probability, RngState};
 use salib_samplers::SaltelliMatrix;
 
 use crate::saltelli2010::estimate_saltelli2010;
@@ -56,6 +58,12 @@ use crate::sobol_indices::{BootstrapMethod, SobolIndices, SobolIndicesWithCi};
 pub enum BootstrapError {
     #[error("bootstrap: alpha must be finite and strictly between 0 and 1")]
     InvalidAlpha,
+    /// At least one bootstrap draw is required.
+    #[error("bootstrap: resamples must be ≥ 1, got 0")]
+    ZeroResamples,
+    /// At least one observation is required.
+    #[error("bootstrap: sample count must be ≥ 1, got 0")]
+    EmptySample,
 }
 
 /// Estimate Sobol' indices via Saltelli 2010 + percentile bootstrap
@@ -77,10 +85,8 @@ pub enum BootstrapError {
 /// # Errors
 ///
 /// Returns [`BootstrapError::InvalidAlpha`] unless `0 < alpha < 1` and alpha is finite.
-///
-/// # Panics
-///
-/// On `resamples == 0` — at least one resample is required for a CI.
+/// Returns [`BootstrapError::ZeroResamples`] for zero bootstrap draws or
+/// [`BootstrapError::EmptySample`] for a zero-row design.
 #[allow(clippy::many_single_char_names)]
 pub fn estimate_saltelli2010_with_bootstrap<F>(
     matrix: &SaltelliMatrix,
@@ -92,12 +98,15 @@ pub fn estimate_saltelli2010_with_bootstrap<F>(
 where
     F: Fn(&[f64]) -> f64,
 {
-    if !(alpha.is_finite() && 0.0 < alpha && alpha < 1.0) {
-        return Err(BootstrapError::InvalidAlpha);
-    }
-    assert!(resamples > 0, "bootstrap: resamples must be ≥ 1");
-
-    let n = matrix.n;
+    let alpha = Probability::new(alpha)
+        .map_err(|_| BootstrapError::InvalidAlpha)?
+        .get();
+    let resamples = NonZeroUsize::new(resamples)
+        .ok_or(BootstrapError::ZeroResamples)?
+        .get();
+    let n = NonZeroUsize::new(matrix.n)
+        .ok_or(BootstrapError::EmptySample)?
+        .get();
     let d = matrix.dim;
 
     // Cache original model evaluations once. Resampling reuses these
@@ -182,10 +191,12 @@ where
 /// # Errors
 ///
 /// Returns [`BootstrapError::InvalidAlpha`] unless `0 < alpha < 1` and alpha is finite.
+/// Returns [`BootstrapError::ZeroResamples`] for zero bootstrap draws or
+/// [`BootstrapError::EmptySample`] for empty `fa`.
 ///
 /// # Panics
 ///
-/// On `resamples == 0` or mismatched array lengths.
+/// On mismatched array lengths.
 #[allow(clippy::many_single_char_names)]
 pub fn estimate_saltelli2010_from_outputs_with_bootstrap(
     fa: &[f64],
@@ -195,12 +206,15 @@ pub fn estimate_saltelli2010_from_outputs_with_bootstrap(
     alpha: f64,
     rng: &mut RngState,
 ) -> Result<SobolIndicesWithCi, BootstrapError> {
-    if !(alpha.is_finite() && 0.0 < alpha && alpha < 1.0) {
-        return Err(BootstrapError::InvalidAlpha);
-    }
-    assert!(resamples > 0, "bootstrap: resamples must be ≥ 1");
-
-    let n = fa.len();
+    let alpha = Probability::new(alpha)
+        .map_err(|_| BootstrapError::InvalidAlpha)?
+        .get();
+    let resamples = NonZeroUsize::new(resamples)
+        .ok_or(BootstrapError::ZeroResamples)?
+        .get();
+    let n = NonZeroUsize::new(fa.len())
+        .ok_or(BootstrapError::EmptySample)?
+        .get();
     let d = fab.len();
 
     let point = crate::saltelli2010::estimate_saltelli2010_from_outputs(fa, fb, fab);
@@ -356,6 +370,57 @@ where
 mod tests {
     use super::*;
     use salib_samplers::{build_saltelli_matrix, LhsSampler};
+
+    #[test]
+    fn bootstrap_model_rejects_zero_counts_before_evaluation() {
+        let mut matrix =
+            build_saltelli_matrix(&LhsSampler::classic(2), 8, false, &mut fresh_rng()).unwrap();
+        let mut rng = fresh_rng();
+        let before = rng.clone();
+        let result = estimate_saltelli2010_with_bootstrap(
+            &matrix,
+            |_| panic!("zero resamples reached model"),
+            0,
+            0.05,
+            &mut rng,
+        );
+        assert_eq!(result.unwrap_err(), BootstrapError::ZeroResamples);
+        assert_eq!(rng, before);
+
+        matrix.n = 0;
+        let result = estimate_saltelli2010_with_bootstrap(
+            &matrix,
+            |_| panic!("empty sample reached model"),
+            4,
+            0.05,
+            &mut rng,
+        );
+        assert_eq!(result.unwrap_err(), BootstrapError::EmptySample);
+        assert_eq!(rng, before);
+    }
+
+    #[test]
+    fn bootstrap_cached_rejects_zero_counts_before_resampling() {
+        let fa = [0.0, 1.0];
+        let fab = vec![fa.to_vec()];
+        let mut rng = fresh_rng();
+        let before = rng.clone();
+        let result =
+            estimate_saltelli2010_from_outputs_with_bootstrap(&fa, &fa, &fab, 0, 0.05, &mut rng);
+        assert_eq!(result.unwrap_err(), BootstrapError::ZeroResamples);
+        assert_eq!(rng, before);
+
+        let result = estimate_saltelli2010_from_outputs_with_bootstrap(
+            &[],
+            &[],
+            &[vec![]],
+            4,
+            0.05,
+            &mut rng,
+        );
+        assert_eq!(result.unwrap_err(), BootstrapError::EmptySample);
+        assert_eq!(rng, before);
+    }
 
     #[test]
     fn bootstrap_model_rejects_invalid_alpha() {

@@ -45,6 +45,8 @@
 //! 14-dim sampler. The function validates this; odd `sampler.dim()`
 //! returns `SaltelliError::OddBaseDim`.
 
+use std::num::NonZeroUsize;
+
 use ndarray::Array2;
 use salib_core::{Group, RngState};
 
@@ -141,9 +143,7 @@ pub fn build_saltelli_matrix(
     second_order: bool,
     rng: &mut RngState,
 ) -> Result<SaltelliMatrix, SaltelliError> {
-    if n == 0 {
-        return Err(SaltelliError::ZeroN);
-    }
+    let n = NonZeroUsize::new(n).ok_or(SaltelliError::ZeroN)?.get();
     let base_dim = sampler.dim();
     if !base_dim.is_multiple_of(2) {
         return Err(SaltelliError::OddBaseDim { dim: base_dim });
@@ -234,9 +234,7 @@ pub fn build_grouped_saltelli_matrix(
     second_order: bool,
     rng: &mut RngState,
 ) -> Result<SaltelliMatrix, SaltelliError> {
-    if n == 0 {
-        return Err(SaltelliError::ZeroN);
-    }
+    let n = NonZeroUsize::new(n).ok_or(SaltelliError::ZeroN)?.get();
     let base_dim = sampler.dim();
     if !base_dim.is_multiple_of(2) {
         return Err(SaltelliError::OddBaseDim { dim: base_dim });

@@ -65,6 +65,8 @@ use ndarray::Array2;
 use rand::RngCore;
 use salib_core::RngState;
 
+pub use crate::harmonic_budget::{HarmonicBudget, HarmonicError};
+
 /// Output of [`build_fast_design`].
 ///
 /// `#[non_exhaustive]` — future fields (`recorded_rng_state` for
@@ -121,6 +123,8 @@ pub enum FastError {
 /// interest at harmonic order `harmonic` (typically `4`).
 ///
 /// Total cost: `n_per_factor · d` model evaluations.
+/// Use [`build_fast_design_with_budget`] when the harmonic order has
+/// already been validated as a [`HarmonicBudget`].
 ///
 /// # Errors
 ///
@@ -130,7 +134,6 @@ pub enum FastError {
 /// - [`FastError::InsufficientSamples`] if `n_per_factor < 4 · harmonic² + 1`
 ///   (would yield `m = floor(ω_max / (2·M)) = 0`, no bandwidth budget for
 ///   the complementary set).
-#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 pub fn build_fast_design(
     d: usize,
     n_per_factor: usize,
@@ -140,12 +143,37 @@ pub fn build_fast_design(
     if d == 0 {
         return Err(FastError::ZeroD);
     }
-    if harmonic == 0 {
-        return Err(FastError::ZeroHarmonic);
+    let harmonic = HarmonicBudget::new(harmonic).map_err(|_| {
+        if harmonic == 0 {
+            FastError::ZeroHarmonic
+        } else {
+            FastError::InvalidHarmonic { harmonic }
+        }
+    })?;
+    build_fast_design_with_budget(d, n_per_factor, harmonic, rng)
+}
+
+/// Build a FAST design with a checked harmonic order.
+///
+/// The [`HarmonicBudget`] parameter guarantees `1..=32` at this boundary.
+/// The raw-integer [`build_fast_design`] constructor validates and delegates
+/// here for compatibility.
+///
+/// # Errors
+/// Returns [`FastError::ZeroD`] for zero factors or
+/// [`FastError::InsufficientSamples`] when `n_per_factor < 4·M² + 1`,
+/// including zero samples. Validation precedes RNG consumption.
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+pub fn build_fast_design_with_budget(
+    d: usize,
+    n_per_factor: usize,
+    harmonic: HarmonicBudget,
+    rng: &mut RngState,
+) -> Result<FastDesign, FastError> {
+    if d == 0 {
+        return Err(FastError::ZeroD);
     }
-    if harmonic > 32 {
-        return Err(FastError::InvalidHarmonic { harmonic });
-    }
+    let harmonic = harmonic.get();
     // n ≥ 4M² + 1 ⇒ ω_max ≥ 2M ⇒ m ≥ 1. Guarantees that `ω_max` is
     // strictly the maximum entry per row of `omegas` (no ties with
     // complementary entries) and that the linspace / cycling
@@ -281,6 +309,44 @@ fn uniform_unit(rng: &mut rand_chacha::ChaCha20Rng) -> f64 {
 #[allow(clippy::float_cmp, clippy::cast_precision_loss)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typed_fast_design_matches_integer_constructor() {
+        for m in [1, 4, 32] {
+            let n = 4 * m as usize * m as usize + 1;
+            let mut raw_rng = RngState::from_seed(SEED);
+            let mut typed_rng = raw_rng.clone();
+            let raw = build_fast_design(2, n, m, &mut raw_rng).unwrap();
+            let typed = build_fast_design_with_budget(
+                2,
+                n,
+                HarmonicBudget::new(m).unwrap(),
+                &mut typed_rng,
+            )
+            .unwrap();
+            assert_eq!(raw.samples, typed.samples);
+            assert_eq!(raw.omegas, typed.omegas);
+            assert_eq!(raw.phases, typed.phases);
+            assert_eq!(raw.harmonic, typed.harmonic);
+            assert_eq!(raw_rng, typed_rng);
+        }
+    }
+
+    #[test]
+    fn typed_fast_design_rejects_zero_samples_before_rng_consumption() {
+        let mut rng = RngState::from_seed(SEED);
+        let before = rng.clone();
+        assert_eq!(
+            build_fast_design_with_budget(2, 0, HarmonicBudget::new(4).unwrap(), &mut rng)
+                .unwrap_err(),
+            FastError::InsufficientSamples {
+                n_per_factor: 0,
+                harmonic: 4,
+                minimum: 65
+            },
+        );
+        assert_eq!(rng, before);
+    }
 
     #[test]
     fn fast_rejects_excessive_harmonic() {

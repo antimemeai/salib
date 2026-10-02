@@ -97,6 +97,7 @@ pub enum Distribution {
 
     /// Bernoulli with success probability `p`. Quantile: 0 if
     /// `u < 1 - p`, else 1.
+    /// [`crate::ProblemBuilder`] requires `0 < p < 1`.
     Bernoulli { p: f64 },
 
     /// Discrete uniform on the inclusive integer range `[lo, hi]`.

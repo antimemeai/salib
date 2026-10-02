@@ -87,6 +87,7 @@
 
 use std::error::Error as StdError;
 use std::fmt;
+use std::num::NonZeroUsize;
 
 use ndarray::{Array2, ArrayView2};
 use rand::RngCore;
@@ -216,16 +217,15 @@ where
     F: FnMut(ArrayView2<'_, f64>, &[f64]) -> Result<Vec<f64>, BoxedEstimatorError>,
 {
     // ── Input validation ────────────────────────────────────────────
-    if n_resamples == 0 {
-        return Err(BootstrapGivenDataError::ZeroResamples);
-    }
+    let n_resamples = NonZeroUsize::new(n_resamples)
+        .ok_or(BootstrapGivenDataError::ZeroResamples)?
+        .get();
     if !alpha.is_finite() || alpha <= 0.0 || alpha >= 1.0 {
         return Err(BootstrapGivenDataError::OutOfRangeAlpha { alpha });
     }
-    let n = x.nrows();
-    if n == 0 {
-        return Err(BootstrapGivenDataError::EmptySample);
-    }
+    let n = NonZeroUsize::new(x.nrows())
+        .ok_or(BootstrapGivenDataError::EmptySample)?
+        .get();
     if y.len() != n {
         return Err(BootstrapGivenDataError::ShapeMismatch {
             x_rows: n,

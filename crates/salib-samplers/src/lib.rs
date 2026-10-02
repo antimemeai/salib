@@ -23,6 +23,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod fast;
+pub mod harmonic_budget;
 pub mod iman_conover;
 pub mod lhs;
 pub mod morris;
@@ -32,7 +33,8 @@ pub mod saltelli_matrix;
 pub mod sampler;
 pub mod sobol;
 
-pub use fast::{build_fast_design, FastDesign, FastError};
+pub use fast::{build_fast_design, build_fast_design_with_budget, FastDesign, FastError};
+pub use harmonic_budget::{HarmonicBudget, HarmonicError};
 pub use iman_conover::{iman_conover_transform, ImanConoverError};
 pub use lhs::{LhsKind, LhsSampler};
 pub use morris::{

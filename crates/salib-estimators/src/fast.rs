@@ -55,7 +55,7 @@ use std::sync::Arc;
 
 use rustfft::{num_complex::Complex, Fft, FftPlanner};
 use salib_core::tree_sum;
-use salib_samplers::FastDesign;
+use salib_samplers::{FastDesign, HarmonicBudget};
 
 /// First-order and total-order Sobol' index estimates per factor.
 ///
@@ -141,10 +141,13 @@ where
 {
     let n = design.n_per_factor;
     let d = design.d;
-    let m = design.harmonic;
-    if !(1..=32).contains(&m) {
-        return Err(FastEstimatorError::InvalidHarmonic { harmonic: m });
-    }
+    // FastDesign metadata is public (and may be deserialized), so validate
+    // it again before FFT planning or invoking the model.
+    let m = HarmonicBudget::new(design.harmonic)
+        .map_err(|_| FastEstimatorError::InvalidHarmonic {
+            harmonic: design.harmonic,
+        })?
+        .get();
 
     let fft = build_fft_planner(n);
 
@@ -254,9 +257,13 @@ mod tests {
         // Public designs can be mutated or deserialized, so the estimator
         // must validate even when the sampler already does.
         let mut design = build(1, 6401);
-        design.harmonic = 40;
-        design.omegas[[0, 0]] = 80;
-        assert!(estimate_fast(&design, |x| x[0]).is_err());
+        for harmonic in [0, 33, 40, u32::MAX] {
+            design.harmonic = harmonic;
+            assert_eq!(
+                estimate_fast(&design, |_| panic!("invalid harmonic reached model")).unwrap_err(),
+                FastEstimatorError::InvalidHarmonic { harmonic },
+            );
+        }
     }
 
     const SEED: [u8; 32] = [0x42; 32];
