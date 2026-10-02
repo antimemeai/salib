@@ -133,7 +133,7 @@ fn find_minimum_design_is_cheapest() {
     let result = estimate_g_theory_pir(gate1_grid().view(), GTheoryDesign::Crossed).unwrap();
     let target_phi = 0.80;
     let cost_fn = |ni: usize, nr: usize| (ni * nr) as f64;
-    let design = find_minimum_design(&result, target_phi, 20, 10, &cost_fn)
+    let design = find_minimum_design(&result, target_phi, 20, 10, cost_fn)
         .unwrap()
         .expect("should find a feasible design");
 

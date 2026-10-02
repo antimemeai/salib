@@ -13,9 +13,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use ndarray::Array3;
-use salib_estimators::{
-    estimate_g_theory_pir, project_g_theory_d_study, GTheoryDesign,
-};
+use salib_estimators::{estimate_g_theory_pir, project_g_theory_d_study, GTheoryDesign};
 
 /// Build the 4x3x2 grid from the fixture data.
 fn gate1_grid() -> Array3<f64> {
@@ -122,14 +120,18 @@ fn gate1_d_study_projection_matches_hand_computed() {
     assert!(
         projected.g_coefficient > result.g_coefficient,
         "D-study G({},{}) = {:.4} should exceed G-study G = {:.4}",
-        projected.n_items, projected.n_raters,
-        projected.g_coefficient, result.g_coefficient
+        projected.n_items,
+        projected.n_raters,
+        projected.g_coefficient,
+        result.g_coefficient
     );
     assert!(
         projected.phi_coefficient > result.phi_coefficient,
         "D-study Phi({},{}) = {:.4} should exceed G-study Phi = {:.4}",
-        projected.n_items, projected.n_raters,
-        projected.phi_coefficient, result.phi_coefficient
+        projected.n_items,
+        projected.n_raters,
+        projected.phi_coefficient,
+        result.phi_coefficient
     );
 }
 
@@ -143,12 +145,14 @@ fn gate1_sigma_p_is_dominant() {
     assert!(
         result.sigma_p > result.sigma_i,
         "sigma_p={:.4} should exceed sigma_i={:.4}",
-        result.sigma_p, result.sigma_i
+        result.sigma_p,
+        result.sigma_i
     );
     assert!(
         result.sigma_p > result.sigma_pi,
         "sigma_p={:.4} should exceed sigma_pi={:.4}",
-        result.sigma_p, result.sigma_pi
+        result.sigma_p,
+        result.sigma_pi
     );
 }
 
@@ -162,6 +166,7 @@ fn gate1_g_exceeds_phi() {
     assert!(
         result.g_coefficient >= result.phi_coefficient,
         "G={:.4} should be >= Phi={:.4}",
-        result.g_coefficient, result.phi_coefficient
+        result.g_coefficient,
+        result.phi_coefficient
     );
 }

@@ -181,8 +181,7 @@ pub fn estimate_saltelli2010_from_outputs_with_bootstrap(
     let n = fa.len();
     let d = fab.len();
 
-    let point =
-        crate::saltelli2010::estimate_saltelli2010_from_outputs(fa, fb, fab);
+    let point = crate::saltelli2010::estimate_saltelli2010_from_outputs(fa, fb, fab);
 
     let mut chacha = rng.clone().into_chacha();
     let mut s_resamples: Vec<Vec<f64>> = vec![Vec::with_capacity(resamples); d];
@@ -393,8 +392,10 @@ mod tests {
 
         let mut r1 = RngState::from_seed([0xab; 32]);
         let mut r2 = RngState::from_seed([0xab; 32]);
-        let r1_result = estimate_saltelli2010_with_bootstrap(&m, |x| x[0] + x[1], 50, 0.05, &mut r1);
-        let r2_result = estimate_saltelli2010_with_bootstrap(&m, |x| x[0] + x[1], 50, 0.05, &mut r2);
+        let r1_result =
+            estimate_saltelli2010_with_bootstrap(&m, |x| x[0] + x[1], 50, 0.05, &mut r1);
+        let r2_result =
+            estimate_saltelli2010_with_bootstrap(&m, |x| x[0] + x[1], 50, 0.05, &mut r2);
         assert_eq!(r1_result, r2_result);
     }
 
@@ -411,11 +412,21 @@ mod tests {
         let mut rng_large = RngState::from_seed([0x42; 32]);
         let m_large = build_saltelli_matrix(&s, 1024, false, &mut rng_large).unwrap();
         let mut br = RngState::from_seed([0xab; 32]);
-        let small =
-            estimate_saltelli2010_with_bootstrap(&m_small, |x| x[0] + 2.0 * x[1], 100, 0.05, &mut br);
+        let small = estimate_saltelli2010_with_bootstrap(
+            &m_small,
+            |x| x[0] + 2.0 * x[1],
+            100,
+            0.05,
+            &mut br,
+        );
         let mut br2 = RngState::from_seed([0xab; 32]);
-        let large =
-            estimate_saltelli2010_with_bootstrap(&m_large, |x| x[0] + 2.0 * x[1], 100, 0.05, &mut br2);
+        let large = estimate_saltelli2010_with_bootstrap(
+            &m_large,
+            |x| x[0] + 2.0 * x[1],
+            100,
+            0.05,
+            &mut br2,
+        );
         // Average CI width over factors.
         let small_width: f64 = small
             .first_order_ci
@@ -446,7 +457,8 @@ mod tests {
         let mut rng = fresh_rng();
         let m = build_saltelli_matrix(&s, 256, false, &mut rng).unwrap();
         let mut br = RngState::from_seed([0xab; 32]);
-        let result = estimate_saltelli2010_with_bootstrap(&m, |x| x[0] + 2.0 * x[1], 500, 0.05, &mut br);
+        let result =
+            estimate_saltelli2010_with_bootstrap(&m, |x| x[0] + 2.0 * x[1], 500, 0.05, &mut br);
         for i in 0..result.indices.dim {
             let s_i = result.indices.first_order[i];
             let (lo, hi) = result.first_order_ci[i];
@@ -511,7 +523,9 @@ mod tests {
         let d = 3;
         // Deterministic synthetic data with non-trivial variance.
         let fa: Vec<f64> = (0..n).map(|i| 0.5 + 0.3 * (i as f64 / n as f64)).collect();
-        let fb: Vec<f64> = (0..n).map(|i| 0.4 + 0.2 * ((n - i) as f64 / n as f64)).collect();
+        let fb: Vec<f64> = (0..n)
+            .map(|i| 0.4 + 0.2 * ((n - i) as f64 / n as f64))
+            .collect();
         let fab: Vec<Vec<f64>> = (0..d)
             .map(|j| {
                 (0..n)
@@ -522,12 +536,22 @@ mod tests {
 
         let mut rng_95 = RngState::from_seed([0xcc; 32]);
         let ci_95 = estimate_saltelli2010_from_outputs_with_bootstrap(
-            &fa, &fb, &fab, 500, 0.05, &mut rng_95,
+            &fa,
+            &fb,
+            &fab,
+            500,
+            0.05,
+            &mut rng_95,
         );
 
         let mut rng_90 = RngState::from_seed([0xcc; 32]);
         let ci_90 = estimate_saltelli2010_from_outputs_with_bootstrap(
-            &fa, &fb, &fab, 500, 0.10, &mut rng_90,
+            &fa,
+            &fb,
+            &fab,
+            500,
+            0.10,
+            &mut rng_90,
         );
 
         // Average CI width across all factors.
@@ -577,14 +601,12 @@ mod tests {
         let m = build_saltelli_matrix(&s, 256, false, &mut rng).unwrap();
 
         let mut br_95 = RngState::from_seed([0xdd; 32]);
-        let ci_95 = estimate_saltelli2010_with_bootstrap(
-            &m, |x| x[0] + 2.0 * x[1], 500, 0.05, &mut br_95,
-        );
+        let ci_95 =
+            estimate_saltelli2010_with_bootstrap(&m, |x| x[0] + 2.0 * x[1], 500, 0.05, &mut br_95);
 
         let mut br_90 = RngState::from_seed([0xdd; 32]);
-        let ci_90 = estimate_saltelli2010_with_bootstrap(
-            &m, |x| x[0] + 2.0 * x[1], 500, 0.10, &mut br_90,
-        );
+        let ci_90 =
+            estimate_saltelli2010_with_bootstrap(&m, |x| x[0] + 2.0 * x[1], 500, 0.10, &mut br_90);
 
         let width_95: f64 = ci_95
             .first_order_ci

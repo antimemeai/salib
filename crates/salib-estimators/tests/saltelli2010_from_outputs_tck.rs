@@ -31,11 +31,15 @@ fn from_outputs_matches_model_evaluated_estimation() {
     let matrix = build_saltelli_matrix(&sampler, 256, false, &mut rng).unwrap();
     let model = |x: &[f64]| x[0] + 2.0 * x[1];
 
-    let expected = estimate_saltelli2010(&matrix, &model);
+    let expected = estimate_saltelli2010(&matrix, model);
 
     let fa = evaluate_rows(&matrix.a, &model);
     let fb = evaluate_rows(&matrix.b, &model);
-    let fab: Vec<Vec<f64>> = matrix.a_b.iter().map(|m| evaluate_rows(m, &model)).collect();
+    let fab: Vec<Vec<f64>> = matrix
+        .a_b
+        .iter()
+        .map(|m| evaluate_rows(m, &model))
+        .collect();
 
     let actual = estimate_saltelli2010_from_outputs(&fa, &fb, &fab);
 
@@ -56,19 +60,32 @@ fn bootstrap_from_outputs_matches_model_evaluated_bootstrap() {
 
     let mut bootstrap_rng1 = RngState::from_seed([0xab; 32]);
     let expected =
-        estimate_saltelli2010_with_bootstrap(&matrix, &model, 200, 0.05, &mut bootstrap_rng1);
+        estimate_saltelli2010_with_bootstrap(&matrix, model, 200, 0.05, &mut bootstrap_rng1);
 
     let fa = evaluate_rows(&matrix.a, &model);
     let fb = evaluate_rows(&matrix.b, &model);
-    let fab: Vec<Vec<f64>> = matrix.a_b.iter().map(|m| evaluate_rows(m, &model)).collect();
+    let fab: Vec<Vec<f64>> = matrix
+        .a_b
+        .iter()
+        .map(|m| evaluate_rows(m, &model))
+        .collect();
 
     let mut bootstrap_rng2 = RngState::from_seed([0xab; 32]);
-    let actual =
-        estimate_saltelli2010_from_outputs_with_bootstrap(&fa, &fb, &fab, 200, 0.05, &mut bootstrap_rng2);
+    let actual = estimate_saltelli2010_from_outputs_with_bootstrap(
+        &fa,
+        &fb,
+        &fab,
+        200,
+        0.05,
+        &mut bootstrap_rng2,
+    );
 
     assert_eq!(actual.indices.n, expected.indices.n);
     assert_eq!(actual.indices.dim, expected.indices.dim);
-    assert_eq!(actual.indices.total_variance, expected.indices.total_variance);
+    assert_eq!(
+        actual.indices.total_variance,
+        expected.indices.total_variance
+    );
     assert_eq!(actual.indices.first_order, expected.indices.first_order);
     assert_eq!(actual.indices.total_order, expected.indices.total_order);
     assert_eq!(actual.first_order_ci, expected.first_order_ci);

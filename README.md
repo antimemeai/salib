@@ -13,7 +13,7 @@ accumulation strategy to eliminate float-associativity nondeterminism under
 ```toml
 # Cargo.toml
 [dependencies]
-salib = "0.1"
+salib = "0.2"
 ```
 
 ```rust

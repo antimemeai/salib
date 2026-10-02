@@ -32,8 +32,12 @@ fn from_outputs_s2_matches_model_evaluated() {
     // Compute model outputs manually
     let n = m.n;
     let d = m.dim;
-    let fa: Vec<f64> = (0..n).map(|i| model(m.a.row(i).as_slice().unwrap())).collect();
-    let fb: Vec<f64> = (0..n).map(|i| model(m.b.row(i).as_slice().unwrap())).collect();
+    let fa: Vec<f64> = (0..n)
+        .map(|i| model(m.a.row(i).as_slice().unwrap()))
+        .collect();
+    let fb: Vec<f64> = (0..n)
+        .map(|i| model(m.b.row(i).as_slice().unwrap()))
+        .collect();
     let fab: Vec<Vec<f64>> = (0..d)
         .map(|j| {
             (0..n)
@@ -41,7 +45,10 @@ fn from_outputs_s2_matches_model_evaluated() {
                 .collect()
         })
         .collect();
-    let b_a = m.b_a.as_ref().expect("second_order=true should produce b_a");
+    let b_a = m
+        .b_a
+        .as_ref()
+        .expect("second_order=true should produce b_a");
     let fba: Vec<Vec<f64>> = (0..d)
         .map(|j| {
             (0..n)
@@ -50,8 +57,7 @@ fn from_outputs_s2_matches_model_evaluated() {
         })
         .collect();
 
-    let from_outputs =
-        estimate_saltelli2010_from_outputs_with_second_order(&fa, &fb, &fab, &fba);
+    let from_outputs = estimate_saltelli2010_from_outputs_with_second_order(&fa, &fb, &fab, &fba);
 
     // S1 and ST should match exactly
     for i in 0..d {
@@ -98,14 +104,26 @@ fn from_outputs_s2_shape_is_upper_triangle() {
     let model = |x: &[f64]| x[0] + x[1] * x[2] + x[3];
     let n = m.n;
     let d = m.dim;
-    let fa: Vec<f64> = (0..n).map(|i| model(m.a.row(i).as_slice().unwrap())).collect();
-    let fb: Vec<f64> = (0..n).map(|i| model(m.b.row(i).as_slice().unwrap())).collect();
+    let fa: Vec<f64> = (0..n)
+        .map(|i| model(m.a.row(i).as_slice().unwrap()))
+        .collect();
+    let fb: Vec<f64> = (0..n)
+        .map(|i| model(m.b.row(i).as_slice().unwrap()))
+        .collect();
     let fab: Vec<Vec<f64>> = (0..d)
-        .map(|j| (0..n).map(|i| model(m.a_b[j].row(i).as_slice().unwrap())).collect())
+        .map(|j| {
+            (0..n)
+                .map(|i| model(m.a_b[j].row(i).as_slice().unwrap()))
+                .collect()
+        })
         .collect();
     let b_a = m.b_a.as_ref().unwrap();
     let fba: Vec<Vec<f64>> = (0..d)
-        .map(|j| (0..n).map(|i| model(b_a[j].row(i).as_slice().unwrap())).collect())
+        .map(|j| {
+            (0..n)
+                .map(|i| model(b_a[j].row(i).as_slice().unwrap()))
+                .collect()
+        })
         .collect();
 
     let result = estimate_saltelli2010_from_outputs_with_second_order(&fa, &fb, &fab, &fba);
@@ -130,14 +148,26 @@ fn from_outputs_s2_detects_known_interaction() {
     let model = |x: &[f64]| x[0] * x[1] + 0.1 * x[2];
     let n = m.n;
     let d = m.dim;
-    let fa: Vec<f64> = (0..n).map(|i| model(m.a.row(i).as_slice().unwrap())).collect();
-    let fb: Vec<f64> = (0..n).map(|i| model(m.b.row(i).as_slice().unwrap())).collect();
+    let fa: Vec<f64> = (0..n)
+        .map(|i| model(m.a.row(i).as_slice().unwrap()))
+        .collect();
+    let fb: Vec<f64> = (0..n)
+        .map(|i| model(m.b.row(i).as_slice().unwrap()))
+        .collect();
     let fab: Vec<Vec<f64>> = (0..d)
-        .map(|j| (0..n).map(|i| model(m.a_b[j].row(i).as_slice().unwrap())).collect())
+        .map(|j| {
+            (0..n)
+                .map(|i| model(m.a_b[j].row(i).as_slice().unwrap()))
+                .collect()
+        })
         .collect();
     let b_a = m.b_a.as_ref().unwrap();
     let fba: Vec<Vec<f64>> = (0..d)
-        .map(|j| (0..n).map(|i| model(b_a[j].row(i).as_slice().unwrap())).collect())
+        .map(|j| {
+            (0..n)
+                .map(|i| model(b_a[j].row(i).as_slice().unwrap()))
+                .collect()
+        })
         .collect();
 
     let result = estimate_saltelli2010_from_outputs_with_second_order(&fa, &fb, &fab, &fba);

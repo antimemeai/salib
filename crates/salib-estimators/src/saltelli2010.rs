@@ -201,7 +201,11 @@ pub fn estimate_saltelli2010_from_outputs(
     for fab_i in fab {
         let diff: Vec<f64> = fab_i.iter().zip(fa.iter()).map(|(ab, a)| ab - a).collect();
         let s_i_num = tree_dot(fb, &diff) / n_f;
-        let s_i = if d_var.abs() < 1e-30 { 0.0 } else { s_i_num / d_var };
+        let s_i = if d_var.abs() < 1e-30 {
+            0.0
+        } else {
+            s_i_num / d_var
+        };
         first_order.push(s_i);
 
         let sq_diff: Vec<f64> = fa
@@ -210,7 +214,11 @@ pub fn estimate_saltelli2010_from_outputs(
             .map(|(a, ab)| (a - ab).powi(2))
             .collect();
         let s_t_i_num = tree_sum(&sq_diff) / (2.0 * n_f);
-        let s_t_i = if d_var.abs() < 1e-30 { 0.0 } else { s_t_i_num / d_var };
+        let s_t_i = if d_var.abs() < 1e-30 {
+            0.0
+        } else {
+            s_t_i_num / d_var
+        };
         total_order.push(s_t_i);
     }
 
@@ -264,7 +272,11 @@ pub fn estimate_saltelli2010_from_outputs_with_second_order(
     for fab_i in fab {
         let diff: Vec<f64> = fab_i.iter().zip(fa.iter()).map(|(ab, a)| ab - a).collect();
         let s_i_num = tree_dot(fb, &diff) / n_f;
-        let s_i = if d_var.abs() < 1e-30 { 0.0 } else { s_i_num / d_var };
+        let s_i = if d_var.abs() < 1e-30 {
+            0.0
+        } else {
+            s_i_num / d_var
+        };
         first_order.push(s_i);
 
         let sq_diff: Vec<f64> = fa
@@ -273,7 +285,11 @@ pub fn estimate_saltelli2010_from_outputs_with_second_order(
             .map(|(a, ab)| (a - ab).powi(2))
             .collect();
         let s_t_i_num = tree_sum(&sq_diff) / (2.0 * n_f);
-        let s_t_i = if d_var.abs() < 1e-30 { 0.0 } else { s_t_i_num / d_var };
+        let s_t_i = if d_var.abs() < 1e-30 {
+            0.0
+        } else {
+            s_t_i_num / d_var
+        };
         total_order.push(s_t_i);
     }
 
