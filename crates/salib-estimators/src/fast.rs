@@ -31,7 +31,7 @@
 //! # Determinism
 //!
 //! Pure under `(design, model)`. The `rustfft` planner is
-//! bit-deterministic for a fixed input length; spectrum extraction
+//! bit-reproducible for a fixed input length; spectrum extraction
 //! and accumulation use `salib-core` tree-fold reductions. Same
 //! `(design, model)` in → bit-identical `FastIndices` out
 //! regardless of rayon thread count.

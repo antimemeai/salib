@@ -23,7 +23,7 @@ rand_chacha = { version = "0.9", default-features = false }
 # Apache-2.0. Used only for the forward FFT
 # in `fast::estimate_fast`; non-load-bearing on
 # determinism guarantees because the FFT is evaluated on a fixed
-# input vector and rustfft is bit-deterministic for the same input.
+# input vector and rustfft is bit-reproducible for the same input.
 rustfft = "6"
 # OLS via normal equations needs (X^T X)^-1 for SRC/PCC. statrs
 # already pulls nalgebra into the graph; we declare it explicitly

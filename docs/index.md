@@ -1,7 +1,7 @@
 # salib
 
 Global sensitivity analysis for Rust, implemented from the primary literature.
-Bit-deterministic by construction.
+Bit-reproducible: same seed, same results, regardless of thread count.
 
 [crates.io](https://crates.io/crates/salib) · [API reference](https://docs.rs/salib) · [source](https://github.com/antimeme-ai/salib)
 
@@ -77,5 +77,5 @@ Build a cheap approximation, extract indices analytically.
 ## Reference
 
 - **[Bibliography](bibliography.md)** — annotated references for every method.
-- **[Internals](internals.md)** — bit-determinism, tree-structured reductions, the rayon contract.
+- **[Internals](internals.md)** — bit-reproducibility, tree-structured reductions, the rayon contract.
 - **[Crate map](crates.md)** — which crate owns what, dependency graph, feature flags.

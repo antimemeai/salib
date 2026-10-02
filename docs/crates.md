@@ -41,7 +41,7 @@ Types that everything else depends on.
 | `Factor` | Name + distribution for one input |
 | `Distribution` | `Uniform`, `Normal`, `LogNormal`, `Triangular`, `Beta` |
 | `RngState` | Deterministic ChaCha20 RNG with `split()` for parallelism |
-| `tree_sum`, `tree_dot`, `tree_var` | Binary-tree accumulation for bit-deterministic parallel sums |
+| `tree_sum`, `tree_dot`, `tree_var` | Binary-tree accumulation for bit-reproducible parallel sums |
 
 ### salib-samplers
 

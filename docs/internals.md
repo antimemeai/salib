@@ -1,14 +1,14 @@
 # Internals
 
-How salib guarantees bit-deterministic results regardless of thread count, and the engineering decisions behind the parallel implementation.
+How salib guarantees bit-reproducible results regardless of thread count, and the engineering decisions behind the parallel implementation.
 
 ---
 
-## Bit-determinism
+## Bit-reproducibility
 
-salib produces identical floating-point results for a given seed regardless of how many threads are available. This is not approximate reproducibility — it is exact, bitwise identity.
+salib produces identical floating-point results for a given seed regardless of how many threads are available. This is not approximate reproducibility — it is exact, bitwise identity. (Note: this is a *reproducibility* guarantee, not a claim about physical determinism. It holds for a given binary on a given platform.)
 
-Most parallel numerical libraries sacrifice determinism because floating-point addition is not associative: $(a + b) + c \neq a + (b + c)$ in IEEE 754. When a thread pool splits work differently across runs, the reduction order changes, and the sum changes.
+Most parallel numerical libraries sacrifice bitwise reproducibility because floating-point addition is not associative: $(a + b) + c \neq a + (b + c)$ in IEEE 754. When a thread pool splits work differently across runs, the reduction order changes, and the sum changes.
 
 salib avoids this by never allowing the thread pool to determine reduction order.
 

@@ -38,7 +38,7 @@
 //!   factor. Use [`poincare_constant`] to derive these from a
 //!   `Distribution`.
 //! - `var_y: f64` — total variance `Var(Y)` over the sample set.
-//!   Caller computes via `salib_core::tree_var` for bit-determinism.
+//!   Caller computes via `salib_core::tree_var` for bit-reproducibility.
 //!
 //! # Why caller-supplied gradients (not enum)
 //!

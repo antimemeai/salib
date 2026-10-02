@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 description = """
 Foundational types for salib: Problem, Factor, Distribution, RngState
-(multi-stream ChaCha20), and bit-deterministic tree reductions.
+(multi-stream ChaCha20), and bit-reproducible tree reductions.
 """
 
 [lib]

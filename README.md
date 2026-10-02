@@ -1,9 +1,9 @@
 # salib
 
 Global sensitivity analysis for Rust, implemented from the primary
-literature. Bit-deterministic by construction.
+literature.
 
-**Bit-deterministic**: identical `RngState` produces identical results
+**Bit-reproducible**: identical `RngState` produces identical results
 regardless of thread count. Parallel reductions use a tree-structured
 accumulation strategy to eliminate float-associativity nondeterminism under
 [rayon](https://docs.rs/rayon).

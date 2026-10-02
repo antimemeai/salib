@@ -6,7 +6,7 @@
 [![license](https://img.shields.io/crates/l/salib.svg)](https://github.com/antimeme-ai/salib)
 
 Global sensitivity analysis for Rust, implemented from the primary
-literature. Bit-deterministic by construction.
+literature. Bit-reproducible: same seed, same results, regardless of thread count.
 
 ## Quickstart
 
@@ -109,7 +109,7 @@ or depend on individual crates for finer control.
 | `polars` | no | `DataFrame` conversions (implies `arrow`) |
 | `full` | no | Everything except `serde`, `arrow`, `polars` |
 
-## Bit-determinism
+## Bit-reproducibility
 
 Identical `RngState` seeds produce identical results regardless of thread
 count. Parallel reductions use tree-structured accumulation to eliminate

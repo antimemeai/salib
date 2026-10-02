@@ -39,7 +39,7 @@
 //!
 //! Pure under `(X, Y, harmonic)`. Stable sort on `X[:, i]` gives a
 //! reproducible permutation; tie-breaking falls back to input
-//! order. `rustfft` is bit-deterministic for fixed input. Same
+//! order. `rustfft` is bit-reproducible for fixed input. Same
 //! `(X, Y)` in → bit-identical `RbdFastIndices` out.
 
 #![allow(

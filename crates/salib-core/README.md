@@ -6,7 +6,7 @@
 
 Foundational types for the [salib](https://crates.io/crates/salib) workspace:
 problem definitions, factor distributions, reproducible RNG, and
-bit-deterministic reductions.
+bit-reproducible reductions.
 
 Most users should depend on `salib` directly. Use `salib-core` when you
 need the base types without pulling in samplers or estimators.
@@ -19,7 +19,7 @@ need the base types without pulling in samplers or estimators.
 | `Factor` | Name, distribution, and optional group membership |
 | `Distribution` | Uniform, Normal, LogNormal, Triangular, and more |
 | `RngState` | Multi-stream ChaCha20 RNG with deterministic seeding |
-| `tree_sum`, `tree_dot`, `tree_var` | Bit-deterministic reductions (serial) |
+| `tree_sum`, `tree_dot`, `tree_var` | Bit-reproducible reductions (serial) |
 | `par_tree_sum`, `par_tree_dot`, `par_tree_var` | Same, parallelized via rayon |
 
 ## Feature flags

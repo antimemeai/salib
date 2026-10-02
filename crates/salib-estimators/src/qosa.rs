@@ -240,7 +240,7 @@ pub fn estimate_qosa(
     let global_quantile = y_sorted[q_idx];
 
     // Global CTE via Prop 3.1 estimator: (1/(N(1-α))) Σⱼ Y_j · 1_{Y_j > θ̂*}.
-    // (We compute the sum via tree_sum for bit-determinism.)
+    // (We compute the sum via tree_sum for bit-reproducibility.)
     let global_excess: Vec<f64> = y
         .iter()
         .map(|&yj| if yj > global_quantile { yj } else { 0.0 })
