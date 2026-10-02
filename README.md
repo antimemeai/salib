@@ -56,7 +56,7 @@ depend on individual crates for finer control.
 
 | Crate | Contents |
 |---|---|
-| `salib-core` | `Problem`, `Factor`, `Distribution`, `RngState`, deterministic reductions |
+| `salib-core` | `Problem`, `Factor`, `Distribution`, `RngState`, bit-reproducible reductions |
 | `salib-samplers` | LHS, Sobol' QMC, Halton, Saltelli (A/B/A\_Bi), Morris trajectories, FAST/eFAST/RBD-FAST designs |
 | `salib-estimators` | Variance-based Sobol' (Saltelli2010, Jansen, Janon, Owen), Morris EE, FAST/eFAST, RBD-FAST, Borgonovo delta, PAWN, DGSM, regression (SRC/SRRC/PCC/PRCC), given-data Sobol', ANOVA, HDMR, G-theory, fractional factorial, discrepancy |
 | `salib-surrogate` | PCE (full + sparse LARS), active subspaces |
@@ -76,6 +76,45 @@ shapley    = ["dep:salib-shapley"]
 validation = ["dep:salib-validation"]
 full       = ["samplers", "estimators", "surrogate", "shapley", "validation"]
 ```
+
+## Testing
+
+There is no formal specification to conform to — salib implements methods
+from published papers, and its correctness is measured against those papers.
+The test suite reflects that reality.
+
+Estimators are validated against closed-form analytic results. The
+Ishigami function, Sobol' G-function, and other canonical test problems
+have exact Sobol' indices known in closed form; we compute estimates from
+samples and check they land within Monte Carlo tolerance of the published
+values. This is the primary correctness gate — `salib-validation` provides
+the reference values.
+
+But exact expected values only catch gross errors. The more insidious
+failures are silent: a normalization that drifts under scaling, an index
+that swaps under factor reordering, a variance formula that collapses on
+large-offset inputs. To catch those, the suite also exercises metamorphic
+oracles — mathematical identities that must hold between runs with
+different inputs but related structure. Scale the output by a constant and
+every Sobol' index should be unchanged. Permute the design columns and the
+indices should permute with them. Feed in a purely additive model and the
+interaction terms should vanish. These relations require no ground truth:
+they are properties of the math itself, verified against the code's own
+outputs.
+
+On top of that, structural tests pin down the sampling machinery — LHS
+stratification, Sobol' canonical sequences, Saltelli matrix construction —
+and bit-reproducibility tests confirm that the same seed produces the same
+bits regardless of thread count.
+
+Run the full suite with `cargo test --workspace` (about a minute for 917
+tests). During development, scope your runs: `cargo test -p salib-estimators
+<pattern>` touches only what you're working on.
+
+The testing strategy lives in `docs/test-modernization-plan.md`. Deeper
+analyses — every metamorphic relation, float hazard, formal verification
+target, and type-level constraint opportunity — are catalogued in
+`docs/analysis/`.
 
 ## Requirements
 

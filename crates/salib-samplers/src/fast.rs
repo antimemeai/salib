@@ -97,6 +97,8 @@ pub struct FastDesign {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum FastError {
+    #[error("FAST: harmonic must be in 1..=32, got {harmonic}")]
+    InvalidHarmonic { harmonic: u32 },
     #[error("FAST: d must be ≥ 1, got 0")]
     ZeroD,
     #[error("FAST: harmonic must be ≥ 1, got 0")]
@@ -124,6 +126,7 @@ pub enum FastError {
 ///
 /// - [`FastError::ZeroD`] if `d == 0`.
 /// - [`FastError::ZeroHarmonic`] if `harmonic == 0`.
+/// - [`FastError::InvalidHarmonic`] if `harmonic > 32`.
 /// - [`FastError::InsufficientSamples`] if `n_per_factor < 4 · harmonic² + 1`
 ///   (would yield `m = floor(ω_max / (2·M)) = 0`, no bandwidth budget for
 ///   the complementary set).
@@ -139,6 +142,9 @@ pub fn build_fast_design(
     }
     if harmonic == 0 {
         return Err(FastError::ZeroHarmonic);
+    }
+    if harmonic > 32 {
+        return Err(FastError::InvalidHarmonic { harmonic });
     }
     // n ≥ 4M² + 1 ⇒ ω_max ≥ 2M ⇒ m ≥ 1. Guarantees that `ω_max` is
     // strictly the maximum entry per row of `omegas` (no ties with
@@ -275,6 +281,14 @@ fn uniform_unit(rng: &mut rand_chacha::ChaCha20Rng) -> f64 {
 #[allow(clippy::float_cmp, clippy::cast_precision_loss)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fast_rejects_excessive_harmonic() {
+        for harmonic in [40, u32::MAX] {
+            let mut rng = RngState::from_seed(SEED);
+            assert!(build_fast_design(1, 6401, harmonic, &mut rng).is_err());
+        }
+    }
 
     const SEED: [u8; 32] = [0; 32];
 

@@ -60,7 +60,8 @@ fn bootstrap_from_outputs_matches_model_evaluated_bootstrap() {
 
     let mut bootstrap_rng1 = RngState::from_seed([0xab; 32]);
     let expected =
-        estimate_saltelli2010_with_bootstrap(&matrix, model, 200, 0.05, &mut bootstrap_rng1);
+        estimate_saltelli2010_with_bootstrap(&matrix, model, 200, 0.05, &mut bootstrap_rng1)
+            .unwrap();
 
     let fa = evaluate_rows(&matrix.a, &model);
     let fb = evaluate_rows(&matrix.b, &model);
@@ -78,7 +79,8 @@ fn bootstrap_from_outputs_matches_model_evaluated_bootstrap() {
         200,
         0.05,
         &mut bootstrap_rng2,
-    );
+    )
+    .unwrap();
 
     assert_eq!(actual.indices.n, expected.indices.n);
     assert_eq!(actual.indices.dim, expected.indices.dim);

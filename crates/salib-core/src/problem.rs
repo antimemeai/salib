@@ -73,12 +73,32 @@ pub struct Group {
 /// `output`) land via follow-on PRs (each has its own design
 /// questions). `Problem` is `#[non_exhaustive]` — adding those
 /// fields is non-breaking.
+///
+/// Validated factors cannot be mutated through public fields:
+///
+/// ```compile_fail
+/// use salib_core::{Distribution, ProblemBuilder};
+/// let mut problem = ProblemBuilder::new()
+///     .factor("x", Distribution::Uniform { lo: 0.0, hi: 1.0 })
+///     .build().unwrap();
+/// problem.factors.clear();
+/// ```
+///
+/// Validated groups cannot be mutated through public fields:
+///
+/// ```compile_fail
+/// use salib_core::{Distribution, ProblemBuilder};
+/// let mut problem = ProblemBuilder::new()
+///     .factor("x", Distribution::Uniform { lo: 0.0, hi: 1.0 })
+///     .build().unwrap();
+/// problem.groups = None;
+/// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Problem {
-    pub factors: Vec<Factor>,
+    factors: Vec<Factor>,
     /// Factor groups for grouped SA. `None` = ungrouped (each factor independent).
-    pub groups: Option<Vec<Group>>,
+    groups: Option<Vec<Group>>,
 }
 
 impl Problem {
@@ -92,6 +112,12 @@ impl Problem {
     #[must_use]
     pub fn factors(&self) -> &[Factor] {
         &self.factors
+    }
+
+    /// Read-only view of factor groups, if configured.
+    #[must_use]
+    pub fn groups(&self) -> Option<&[Group]> {
+        self.groups.as_deref()
     }
 
     /// SHA-256 over the canonical-JSON serialization. Stable across
@@ -285,25 +311,31 @@ impl ProblemBuilder {
 fn validate_distribution(d: &Distribution) -> Result<(), String> {
     match *d {
         Distribution::Uniform { lo, hi } => {
-            if !(lo < hi) {
+            if !lo.is_finite() || !hi.is_finite() || !(lo < hi) {
                 return Err(format!("Uniform: lo ({lo}) must be < hi ({hi})"));
             }
         }
-        Distribution::Normal { sigma, .. } => {
-            if !(sigma > 0.0) {
+        Distribution::Normal { mu, sigma } => {
+            if !mu.is_finite() {
+                return Err(format!("Normal: mu ({mu}) must be finite"));
+            }
+            if !sigma.is_finite() || !(sigma > 0.0) {
                 return Err(format!("Normal: sigma ({sigma}) must be > 0"));
             }
         }
-        Distribution::LogNormal { sigma_log, .. } => {
-            if !(sigma_log > 0.0) {
+        Distribution::LogNormal { mu_log, sigma_log } => {
+            if !mu_log.is_finite() {
+                return Err(format!("LogNormal: mu_log ({mu_log}) must be finite"));
+            }
+            if !sigma_log.is_finite() || !(sigma_log > 0.0) {
                 return Err(format!("LogNormal: sigma_log ({sigma_log}) must be > 0"));
             }
         }
         Distribution::Triangular { lo, mode, hi } => {
-            if !(lo < hi) {
+            if !lo.is_finite() || !hi.is_finite() || !(lo < hi) {
                 return Err(format!("Triangular: lo ({lo}) must be < hi ({hi})"));
             }
-            if !(lo <= mode && mode <= hi) {
+            if !mode.is_finite() || !(lo <= mode && mode <= hi) {
                 return Err(format!(
                     "Triangular: mode ({mode}) must be in [lo ({lo}), hi ({hi})]"
                 ));
@@ -315,39 +347,39 @@ fn validate_distribution(d: &Distribution) -> Result<(), String> {
             lo,
             hi,
         } => {
-            if !(alpha > 0.0) {
+            if !alpha.is_finite() || !(alpha > 0.0) {
                 return Err(format!("Beta: alpha ({alpha}) must be > 0"));
             }
-            if !(beta > 0.0) {
+            if !beta.is_finite() || !(beta > 0.0) {
                 return Err(format!("Beta: beta ({beta}) must be > 0"));
             }
-            if !(lo < hi) {
+            if !lo.is_finite() || !hi.is_finite() || !(lo < hi) {
                 return Err(format!("Beta: lo ({lo}) must be < hi ({hi})"));
             }
         }
         Distribution::Gamma { shape, scale } => {
-            if !(shape > 0.0) {
+            if !shape.is_finite() || !(shape > 0.0) {
                 return Err(format!("Gamma: shape ({shape}) must be > 0"));
             }
-            if !(scale > 0.0) {
+            if !scale.is_finite() || !(scale > 0.0) {
                 return Err(format!("Gamma: scale ({scale}) must be > 0"));
             }
         }
         Distribution::Weibull { shape, scale } => {
-            if !(shape > 0.0) {
+            if !shape.is_finite() || !(shape > 0.0) {
                 return Err(format!("Weibull: shape ({shape}) must be > 0"));
             }
-            if !(scale > 0.0) {
+            if !scale.is_finite() || !(scale > 0.0) {
                 return Err(format!("Weibull: scale ({scale}) must be > 0"));
             }
         }
         Distribution::Exponential { lambda } => {
-            if !(lambda > 0.0) {
+            if !lambda.is_finite() || !(lambda > 0.0) {
                 return Err(format!("Exponential: lambda ({lambda}) must be > 0"));
             }
         }
         Distribution::Bernoulli { p } => {
-            if !(0.0..=1.0).contains(&p) {
+            if !p.is_finite() || !(0.0..=1.0).contains(&p) {
                 return Err(format!("Bernoulli: p ({p}) must be in [0, 1]"));
             }
         }
@@ -364,6 +396,98 @@ fn validate_distribution(d: &Distribution) -> Result<(), String> {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn problem_rejects_all_nonfinite_parameters() {
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let distributions = [
+                Distribution::Normal {
+                    mu: bad,
+                    sigma: 1.0,
+                },
+                Distribution::Normal {
+                    mu: 0.0,
+                    sigma: bad,
+                },
+                Distribution::LogNormal {
+                    mu_log: bad,
+                    sigma_log: 1.0,
+                },
+                Distribution::LogNormal {
+                    mu_log: 0.0,
+                    sigma_log: bad,
+                },
+                Distribution::Uniform { lo: bad, hi: 1.0 },
+                Distribution::Uniform { lo: 0.0, hi: bad },
+                Distribution::Triangular {
+                    lo: bad,
+                    mode: 0.5,
+                    hi: 1.0,
+                },
+                Distribution::Triangular {
+                    lo: 0.0,
+                    mode: bad,
+                    hi: 1.0,
+                },
+                Distribution::Triangular {
+                    lo: 0.0,
+                    mode: 0.5,
+                    hi: bad,
+                },
+                Distribution::Beta {
+                    alpha: bad,
+                    beta: 1.0,
+                    lo: 0.0,
+                    hi: 1.0,
+                },
+                Distribution::Beta {
+                    alpha: 1.0,
+                    beta: bad,
+                    lo: 0.0,
+                    hi: 1.0,
+                },
+                Distribution::Beta {
+                    alpha: 1.0,
+                    beta: 1.0,
+                    lo: bad,
+                    hi: 1.0,
+                },
+                Distribution::Beta {
+                    alpha: 1.0,
+                    beta: 1.0,
+                    lo: 0.0,
+                    hi: bad,
+                },
+                Distribution::Gamma {
+                    shape: bad,
+                    scale: 1.0,
+                },
+                Distribution::Gamma {
+                    shape: 1.0,
+                    scale: bad,
+                },
+                Distribution::Weibull {
+                    shape: bad,
+                    scale: 1.0,
+                },
+                Distribution::Weibull {
+                    shape: 1.0,
+                    scale: bad,
+                },
+                Distribution::Exponential { lambda: bad },
+                Distribution::Bernoulli { p: bad },
+            ];
+            for distribution in distributions {
+                assert!(
+                    ProblemBuilder::new()
+                        .factor("x", distribution.clone())
+                        .build()
+                        .is_err(),
+                    "accepted {distribution:?}"
+                );
+            }
+        }
+    }
 
     fn uniform(lo: f64, hi: f64) -> Distribution {
         Distribution::Uniform { lo, hi }
@@ -736,7 +860,7 @@ mod tests {
             .group("scale", &[2])
             .build()
             .unwrap();
-        assert_eq!(p.groups.as_ref().unwrap().len(), 2);
+        assert_eq!(p.groups().unwrap().len(), 2);
     }
 
     #[test]
@@ -745,7 +869,7 @@ mod tests {
             .factor("x1", uniform(0.0, 1.0))
             .build()
             .unwrap();
-        assert!(p.groups.is_none());
+        assert!(p.groups().is_none());
     }
 
     #[test]

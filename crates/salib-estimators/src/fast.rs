@@ -107,6 +107,8 @@ impl fmt::Display for FastIndices {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum FastEstimatorError {
+    #[error("FAST estimator: harmonic must be in 1..=32, got {harmonic}")]
+    InvalidHarmonic { harmonic: u32 },
     /// Total variance is zero (or numerical floor) — model is
     /// constant, no sensitivity to recover.
     #[error("FAST estimator: total variance is zero (model output is constant)")]
@@ -121,6 +123,7 @@ pub enum FastEstimatorError {
 ///
 /// # Errors
 ///
+/// - [`FastEstimatorError::InvalidHarmonic`] if harmonic is outside `1..=32`.
 /// - [`FastEstimatorError::ZeroVariance`] if the model is constant
 ///   over the design samples (total variance below `1e-15`, well
 ///   above the FFT noise floor for `O(1)`-scale outputs).
@@ -139,6 +142,9 @@ where
     let n = design.n_per_factor;
     let d = design.d;
     let m = design.harmonic;
+    if !(1..=32).contains(&m) {
+        return Err(FastEstimatorError::InvalidHarmonic { harmonic: m });
+    }
 
     let fft = build_fft_planner(n);
 
@@ -242,6 +248,16 @@ mod tests {
     use super::*;
     use salib_core::RngState;
     use salib_samplers::build_fast_design;
+
+    #[test]
+    fn fast_rejects_excessive_harmonic() {
+        // Public designs can be mutated or deserialized, so the estimator
+        // must validate even when the sampler already does.
+        let mut design = build(1, 6401);
+        design.harmonic = 40;
+        design.omegas[[0, 0]] = 80;
+        assert!(estimate_fast(&design, |x| x[0]).is_err());
+    }
 
     const SEED: [u8; 32] = [0x42; 32];
 

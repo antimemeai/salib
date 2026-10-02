@@ -105,7 +105,11 @@ where
         //   S_i = (1/N) Σⱼ fb[j] · (fab[i][j] - fa[j]) / D
         let diff: Vec<f64> = fab_i.iter().zip(fa.iter()).map(|(ab, a)| ab - a).collect();
         let s_i_num = tree_dot(&fb, &diff) / n_f;
-        first_order.push(s_i_num / d_var);
+        first_order.push(if d_var.abs() < 1e-30 {
+            0.0
+        } else {
+            s_i_num / d_var
+        });
 
         // Jansen 1999 (Saltelli 2010 Eq f):
         //   S_T_i = (1/(2N)) Σⱼ (fa[j] - fab[i][j])² / D
@@ -115,7 +119,11 @@ where
             .map(|(a, ab)| (a - ab).powi(2))
             .collect();
         let s_t_i_num = tree_sum(&sq_diff) / (2.0 * n_f);
-        total_order.push(s_t_i_num / d_var);
+        total_order.push(if d_var.abs() < 1e-30 {
+            0.0
+        } else {
+            s_t_i_num / d_var
+        });
     }
 
     // ── Second-order indices (Saltelli 2010 Eq d) ────────────────
@@ -143,7 +151,11 @@ where
             for j in (i + 1)..d {
                 let cross: Vec<f64> = (0..n).map(|k| fba[j][k] * fab[i][k] - fa_fb[k]).collect();
                 let vij = tree_sum(&cross) / n_f;
-                let s2_ij = vij / d_var - first_order[i] - first_order[j];
+                let s2_ij = if d_var.abs() < 1e-30 {
+                    0.0
+                } else {
+                    vij / d_var - first_order[i] - first_order[j]
+                };
                 row.push(s2_ij);
             }
             s2.push(row);
@@ -350,16 +362,63 @@ mod tests {
     // ── Trivial models ──────────────────────────────────────────────
 
     #[test]
+    fn saltelli_near_zero_variance_matches_cached_with_second_order() {
+        let matrix =
+            build_saltelli_matrix(&LhsSampler::classic(4), 64, true, &mut fresh_rng()).unwrap();
+        for constant in [true, false] {
+            let model = |x: &[f64]| if constant { 7.0 } else { 1e-16 * x[0] };
+            let indices = estimate_saltelli2010(&matrix, model);
+            let fa = evaluate_rows(&matrix.a, &model);
+            let fb = evaluate_rows(&matrix.b, &model);
+            let fab: Vec<_> = matrix
+                .a_b
+                .iter()
+                .map(|m| evaluate_rows(m, &model))
+                .collect();
+            let fba: Vec<_> = matrix
+                .b_a
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|m| evaluate_rows(m, &model))
+                .collect();
+            let cached = estimate_saltelli2010_from_outputs_with_second_order(&fa, &fb, &fab, &fba);
+            assert!(indices.total_variance.is_finite());
+            assert!(indices.total_variance.abs() < 1e-30);
+            for value in indices
+                .first_order
+                .iter()
+                .chain(&indices.total_order)
+                .chain(indices.second_order.as_ref().unwrap().iter().flatten())
+            {
+                assert!(value.is_finite());
+                assert_eq!(*value, 0.0);
+            }
+            assert_eq!(indices.first_order, cached.first_order);
+            assert_eq!(indices.total_order, cached.total_order);
+            assert_eq!(indices.second_order, cached.second_order);
+        }
+    }
+
+    #[test]
     fn constant_model_yields_zero_variance() {
         let s = LhsSampler::classic(4); // d = 2
         let mut rng = fresh_rng();
         let m = build_saltelli_matrix(&s, 64, false, &mut rng).unwrap();
         let indices = estimate_saltelli2010(&m, |_x| 7.0);
-        // Constant model: variance = 0, indices undefined. The math
-        // produces NaN or Inf; assert variance is 0 within FP.
+        assert!(indices.total_variance.is_finite());
         assert!(indices.total_variance.abs() < 1e-12);
-        // Indices are 0/0 = NaN; that's expected behavior, not a bug.
-        // Estimators surfacing NaN to the caller is the right signal.
+        let cached = estimate_saltelli2010_from_outputs(
+            &vec![7.0; m.n],
+            &vec![7.0; m.n],
+            &vec![vec![7.0; m.n]; m.dim],
+        );
+        for value in indices.first_order.iter().chain(&indices.total_order) {
+            assert!(value.is_finite());
+            assert_eq!(*value, 0.0);
+        }
+        assert_eq!(indices.first_order, cached.first_order);
+        assert_eq!(indices.total_order, cached.total_order);
     }
 
     #[test]

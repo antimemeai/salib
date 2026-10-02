@@ -251,6 +251,9 @@ fn jacobi(n: usize, alpha: f64, beta: f64, x: f64) -> f64 {
 /// (computing logs and exponentiating) to avoid overflow at
 /// moderate `n + α + β`.
 fn jacobi_norm_squared(n: usize, alpha: f64, beta: f64) -> f64 {
+    if n == 0 {
+        return 1.0;
+    }
     let n_f = n as f64;
     // log of:
     //   Γ(n+α+1) · Γ(n+β+1) · Γ(α+β+2)
@@ -321,6 +324,15 @@ mod tests {
     use super::*;
 
     // ── Legendre — closed-form values at known points ────────────
+
+    #[test]
+    fn jacobi_degree_zero_norm_is_one_for_valid_negative_parameters() {
+        for (alpha, beta) in [(-0.75, -0.75), (-0.5, -0.5), (-0.9, -0.2)] {
+            let norm = jacobi_norm_squared(0, alpha, beta);
+            assert!(norm.is_finite(), "nonfinite norm for {alpha}, {beta}");
+            assert_eq!(norm, 1.0);
+        }
+    }
 
     #[test]
     fn legendre_at_zero_matches_table() {

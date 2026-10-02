@@ -50,6 +50,14 @@ use salib_samplers::SaltelliMatrix;
 use crate::saltelli2010::estimate_saltelli2010;
 use crate::sobol_indices::{BootstrapMethod, SobolIndices, SobolIndicesWithCi};
 
+/// Invalid arguments to the Saltelli bootstrap APIs.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum BootstrapError {
+    #[error("bootstrap: alpha must be finite and strictly between 0 and 1")]
+    InvalidAlpha,
+}
+
 /// Estimate Sobol' indices via Saltelli 2010 + percentile bootstrap
 /// CIs. The point estimate matches `estimate_saltelli2010`; CIs come
 /// from `resamples` row-aligned bootstrap draws.
@@ -66,6 +74,10 @@ use crate::sobol_indices::{BootstrapMethod, SobolIndices, SobolIndicesWithCi};
 /// the determinism contract — the `RngState` invariant covers only
 /// the bootstrap-resample draws, not the model evaluations.
 ///
+/// # Errors
+///
+/// Returns [`BootstrapError::InvalidAlpha`] unless `0 < alpha < 1` and alpha is finite.
+///
 /// # Panics
 ///
 /// On `resamples == 0` — at least one resample is required for a CI.
@@ -76,10 +88,13 @@ pub fn estimate_saltelli2010_with_bootstrap<F>(
     resamples: usize,
     alpha: f64,
     rng: &mut RngState,
-) -> SobolIndicesWithCi
+) -> Result<SobolIndicesWithCi, BootstrapError>
 where
     F: Fn(&[f64]) -> f64,
 {
+    if !(alpha.is_finite() && 0.0 < alpha && alpha < 1.0) {
+        return Err(BootstrapError::InvalidAlpha);
+    }
     assert!(resamples > 0, "bootstrap: resamples must be ≥ 1");
 
     let n = matrix.n;
@@ -141,13 +156,13 @@ where
         .map(|samples| percentile_ci(samples, lo_p, hi_p))
         .collect();
 
-    SobolIndicesWithCi {
+    Ok(SobolIndicesWithCi {
         indices: point,
         first_order_ci,
         total_order_ci,
         bootstrap_resamples: resamples,
         method: BootstrapMethod::Percentile,
-    }
+    })
 }
 
 /// Estimate Sobol' indices with bootstrap CIs from pre-computed model
@@ -164,6 +179,10 @@ where
 /// - `resamples`: number of bootstrap draws.
 /// - `rng`: deterministic RNG for bootstrap row-index draws.
 ///
+/// # Errors
+///
+/// Returns [`BootstrapError::InvalidAlpha`] unless `0 < alpha < 1` and alpha is finite.
+///
 /// # Panics
 ///
 /// On `resamples == 0` or mismatched array lengths.
@@ -175,7 +194,10 @@ pub fn estimate_saltelli2010_from_outputs_with_bootstrap(
     resamples: usize,
     alpha: f64,
     rng: &mut RngState,
-) -> SobolIndicesWithCi {
+) -> Result<SobolIndicesWithCi, BootstrapError> {
+    if !(alpha.is_finite() && 0.0 < alpha && alpha < 1.0) {
+        return Err(BootstrapError::InvalidAlpha);
+    }
     assert!(resamples > 0, "bootstrap: resamples must be ≥ 1");
 
     let n = fa.len();
@@ -220,13 +242,13 @@ pub fn estimate_saltelli2010_from_outputs_with_bootstrap(
         .map(|samples| percentile_ci(samples, lo_p, hi_p))
         .collect();
 
-    SobolIndicesWithCi {
+    Ok(SobolIndicesWithCi {
         indices: point,
         first_order_ci,
         total_order_ci,
         bootstrap_resamples: resamples,
         method: BootstrapMethod::Percentile,
-    }
+    })
 }
 
 /// Compute Sobol' indices on cached `fa, fb, fab` values, resampled
@@ -335,6 +357,51 @@ mod tests {
     use super::*;
     use salib_samplers::{build_saltelli_matrix, LhsSampler};
 
+    #[test]
+    fn bootstrap_model_rejects_invalid_alpha() {
+        let matrix =
+            build_saltelli_matrix(&LhsSampler::classic(2), 8, false, &mut fresh_rng()).unwrap();
+        for alpha in [
+            0.0,
+            1.0,
+            -0.1,
+            2.0,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
+            let mut rng = fresh_rng();
+            let result =
+                estimate_saltelli2010_with_bootstrap(&matrix, |x| x[0], 4, alpha, &mut rng);
+            assert_eq!(result.unwrap_err(), BootstrapError::InvalidAlpha);
+        }
+    }
+
+    #[test]
+    fn bootstrap_cached_rejects_invalid_alpha() {
+        let fa = [0.0, 1.0, 2.0, 3.0];
+        let fab = vec![fa.to_vec()];
+        for alpha in [
+            0.0,
+            1.0,
+            -0.1,
+            2.0,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
+            let result = estimate_saltelli2010_from_outputs_with_bootstrap(
+                &fa,
+                &fa,
+                &fab,
+                4,
+                alpha,
+                &mut fresh_rng(),
+            );
+            assert_eq!(result.unwrap_err(), BootstrapError::InvalidAlpha);
+        }
+    }
+
     fn fresh_rng() -> RngState {
         RngState::from_seed([0x42; 32])
     }
@@ -353,7 +420,8 @@ mod tests {
             100,
             0.05,
             &mut bootstrap_rng,
-        );
+        )
+        .unwrap();
         assert_eq!(result.indices.dim, 2);
         assert_eq!(result.first_order_ci.len(), 2);
         assert_eq!(result.total_order_ci.len(), 2);
@@ -373,7 +441,8 @@ mod tests {
             200,
             0.05,
             &mut bootstrap_rng,
-        );
+        )
+        .unwrap();
         for (lo, hi) in &result.first_order_ci {
             assert!(lo <= hi, "S CI: {lo} > {hi}");
         }
@@ -393,9 +462,9 @@ mod tests {
         let mut r1 = RngState::from_seed([0xab; 32]);
         let mut r2 = RngState::from_seed([0xab; 32]);
         let r1_result =
-            estimate_saltelli2010_with_bootstrap(&m, |x| x[0] + x[1], 50, 0.05, &mut r1);
+            estimate_saltelli2010_with_bootstrap(&m, |x| x[0] + x[1], 50, 0.05, &mut r1).unwrap();
         let r2_result =
-            estimate_saltelli2010_with_bootstrap(&m, |x| x[0] + x[1], 50, 0.05, &mut r2);
+            estimate_saltelli2010_with_bootstrap(&m, |x| x[0] + x[1], 50, 0.05, &mut r2).unwrap();
         assert_eq!(r1_result, r2_result);
     }
 
@@ -418,7 +487,8 @@ mod tests {
             100,
             0.05,
             &mut br,
-        );
+        )
+        .unwrap();
         let mut br2 = RngState::from_seed([0xab; 32]);
         let large = estimate_saltelli2010_with_bootstrap(
             &m_large,
@@ -426,7 +496,8 @@ mod tests {
             100,
             0.05,
             &mut br2,
-        );
+        )
+        .unwrap();
         // Average CI width over factors.
         let small_width: f64 = small
             .first_order_ci
@@ -458,7 +529,8 @@ mod tests {
         let m = build_saltelli_matrix(&s, 256, false, &mut rng).unwrap();
         let mut br = RngState::from_seed([0xab; 32]);
         let result =
-            estimate_saltelli2010_with_bootstrap(&m, |x| x[0] + 2.0 * x[1], 500, 0.05, &mut br);
+            estimate_saltelli2010_with_bootstrap(&m, |x| x[0] + 2.0 * x[1], 500, 0.05, &mut br)
+                .unwrap();
         for i in 0..result.indices.dim {
             let s_i = result.indices.first_order[i];
             let (lo, hi) = result.first_order_ci[i];
@@ -542,7 +614,8 @@ mod tests {
             500,
             0.05,
             &mut rng_95,
-        );
+        )
+        .unwrap();
 
         let mut rng_90 = RngState::from_seed([0xcc; 32]);
         let ci_90 = estimate_saltelli2010_from_outputs_with_bootstrap(
@@ -552,7 +625,8 @@ mod tests {
             500,
             0.10,
             &mut rng_90,
-        );
+        )
+        .unwrap();
 
         // Average CI width across all factors.
         let width_95: f64 = ci_95
@@ -602,11 +676,13 @@ mod tests {
 
         let mut br_95 = RngState::from_seed([0xdd; 32]);
         let ci_95 =
-            estimate_saltelli2010_with_bootstrap(&m, |x| x[0] + 2.0 * x[1], 500, 0.05, &mut br_95);
+            estimate_saltelli2010_with_bootstrap(&m, |x| x[0] + 2.0 * x[1], 500, 0.05, &mut br_95)
+                .unwrap();
 
         let mut br_90 = RngState::from_seed([0xdd; 32]);
         let ci_90 =
-            estimate_saltelli2010_with_bootstrap(&m, |x| x[0] + 2.0 * x[1], 500, 0.10, &mut br_90);
+            estimate_saltelli2010_with_bootstrap(&m, |x| x[0] + 2.0 * x[1], 500, 0.10, &mut br_90)
+                .unwrap();
 
         let width_95: f64 = ci_95
             .first_order_ci

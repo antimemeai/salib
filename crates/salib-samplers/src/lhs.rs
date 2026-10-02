@@ -154,14 +154,14 @@ impl Sampler for LhsSampler {
                         #[allow(clippy::cast_precision_loss)]
                         let perm_i = perm[i] as f64;
                         let u = f64::from(chacha.next_u32()) * u32_norm;
-                        out[[i, j]] = (perm_i + u) / n_f;
+                        out[[i, j]] = lhs_cell_value(perm_i, u, n_f);
                     }
                 }
                 LhsKind::Centered => {
                     for i in 0..n {
                         #[allow(clippy::cast_precision_loss)]
                         let perm_i = perm[i] as f64;
-                        out[[i, j]] = (perm_i + 0.5) / n_f;
+                        out[[i, j]] = lhs_cell_value(perm_i, 0.5, n_f);
                     }
                 }
             }
@@ -181,10 +181,31 @@ impl Sampler for LhsSampler {
     }
 }
 
+fn lhs_cell_value(index: f64, jitter: f64, n: f64) -> f64 {
+    // Addition can round the final stratum numerator up to n.
+    ((index + jitter) / n).min(f64::from_bits(0x3fef_ffff_ffff_ffff))
+}
+
 #[cfg(test)]
 #[allow(clippy::float_cmp, clippy::cast_precision_loss)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lhs_large_sample_stays_below_one() {
+        let n = 2_097_153;
+        // The largest possible u32 jitter rounds the last cell to 1
+        // in the unguarded formula; force it instead of hoping RNG
+        // happens to draw this one-in-2^32 value in the last cell.
+        let jitter = f64::from(u32::MAX) / (f64::from(u32::MAX) + 1.0);
+        let last = lhs_cell_value((n - 1) as f64, jitter, n as f64);
+        assert!(last.is_finite());
+        assert!(last < 1.0, "last cell rounded to {last}");
+        let values = LhsSampler::classic(1).unit_sample(n, &mut fresh_rng(0));
+        assert!(values
+            .iter()
+            .all(|v| v.is_finite() && *v >= 0.0 && *v < 1.0));
+    }
 
     fn fresh_rng(stream: u64) -> RngState {
         RngState::from_parts([0x42; 32], stream, 0)

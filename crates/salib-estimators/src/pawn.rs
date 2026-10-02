@@ -118,6 +118,8 @@ impl fmt::Display for PawnIndices {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum PawnError {
+    #[error("PAWN: output at index {index} must be finite")]
+    NonfiniteOutput { index: usize },
     #[error("PAWN: shape mismatch — X has {x_rows} rows, y has {y_len} elements")]
     ShapeMismatch { x_rows: usize, y_len: usize },
     #[error("PAWN: d must be ≥ 1, got 0")]
@@ -143,6 +145,7 @@ pub enum PawnError {
 ///
 /// # Errors
 ///
+/// - [`PawnError::NonfiniteOutput`] if any output is NaN or infinite.
 /// - [`PawnError::ShapeMismatch`] if `x.nrows() != y.len()`.
 /// - [`PawnError::ZeroD`] if `x.ncols() == 0`.
 /// - [`PawnError::TooFewSlices`] if `n_slices < 2`.
@@ -173,6 +176,10 @@ pub fn estimate_pawn(
             n_slices,
             minimum,
         });
+    }
+
+    if let Some(index) = y.iter().position(|v| !v.is_finite()) {
+        return Err(PawnError::NonfiniteOutput { index });
     }
 
     // Sort Y once for the unconditional empirical CDF.
@@ -321,6 +328,27 @@ fn ordinal_ranks(data: &[f64]) -> Vec<usize> {
 #[allow(clippy::float_cmp, clippy::approx_constant)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pawn_rejects_nonfinite_outputs_promptly() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            for output in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                let x = synthetic_x(8, 1);
+                let model = |_: f64| output;
+                let y: Vec<f64> = x.column(0).iter().map(|&v| model(v)).collect();
+                if estimate_pawn(x.view(), &y, 2).is_ok() {
+                    tx.send(false).unwrap();
+                    return;
+                }
+            }
+            tx.send(true).unwrap();
+        });
+        assert!(rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("PAWN must return promptly for nonfinite outputs"));
+        worker.join().unwrap();
+    }
 
     fn synthetic_x(n: usize, d: usize) -> Array2<f64> {
         let mut x = Array2::<f64>::zeros((n, d));

@@ -50,6 +50,7 @@ pub use anova::{
 };
 pub use bootstrap::{
     estimate_saltelli2010_from_outputs_with_bootstrap, estimate_saltelli2010_with_bootstrap,
+    BootstrapError,
 };
 pub use bootstrap_given_data::{
     bootstrap_given_data, BootstrapCi, BootstrapGivenDataError, BoxedEstimatorError,
