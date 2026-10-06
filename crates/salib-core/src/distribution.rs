@@ -174,7 +174,22 @@ impl Distribution {
 // ── Closed-form quantiles ────────────────────────────────────────────
 
 fn uniform_quantile(lo: f64, hi: f64, u: f64) -> f64 {
-    lo + u * (hi - lo)
+    if u == 0.0 {
+        return lo;
+    }
+    if u == 1.0 {
+        return hi;
+    }
+    let width = hi - lo;
+    let result = if width.is_finite() {
+        lo + u * width
+    } else {
+        // Opposite-sign finite bounds can have an infinite difference.
+        // Each weighted term remains finite and their signs oppose.
+        lo * (1.0 - u) + hi * u
+    };
+    // Rounding the width and the sum can put an interior value past hi.
+    result.clamp(lo, hi)
 }
 
 fn triangular_quantile(lo: f64, mode: f64, hi: f64, u: f64) -> f64 {
@@ -224,15 +239,26 @@ fn bernoulli_quantile(p: f64, u: f64) -> f64 {
 
 fn discrete_uniform_quantile(lo: i64, hi: i64, u: f64) -> f64 {
     assert!(lo <= hi, "DiscreteUniform: lo must be <= hi");
-    let n = hi - lo + 1;
+    // Endpoint values must not depend on rounding the inclusive size to f64.
+    #[allow(clippy::cast_precision_loss)]
+    if u == 0.0 {
+        return lo as f64;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    if u == 1.0 {
+        return hi as f64;
+    }
+    // The full inclusive i64 range has 2^64 elements. Keep both the
+    // size and the offset wide enough to avoid overflow before rounding.
+    let n = (hi as i128) - (lo as i128) + 1;
     #[allow(clippy::cast_precision_loss)]
     let scaled = u * (n as f64);
-    // Floor and clamp the upper edge: at u = 1.0, `scaled == n`,
-    // which would index past `hi`. Clamp to `n - 1`.
+    // Sizes above 2^53 are rounded in f64. Clamp the resulting integer
+    // offset so rounding cannot select a value outside the support.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let idx = (scaled.floor() as i64).min(n - 1);
+    let idx = (scaled.floor() as i128).clamp(0, n - 1);
     #[allow(clippy::cast_precision_loss)]
-    let result = (lo + idx) as f64;
+    let result = ((lo as i128) + idx).clamp(lo as i128, hi as i128) as f64;
     result
 }
 

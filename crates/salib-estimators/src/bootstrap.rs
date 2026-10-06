@@ -345,7 +345,28 @@ pub(crate) fn percentile_value(sorted: &[f64], p: f64) -> f64 {
     if lower_idx + 1 >= n {
         return sorted[n - 1];
     }
-    sorted[lower_idx] * (1.0 - frac) + sorted[lower_idx + 1] * frac
+    let a = sorted[lower_idx];
+    let b = sorted[lower_idx + 1];
+    if frac == 0.0 {
+        return a;
+    }
+    if frac == 1.0 {
+        return b;
+    }
+    let width = b - a;
+    let result = if width.is_finite() {
+        // Equal subnormals survive exactly; weighted terms can both
+        // underflow to zero even when the samples are positive.
+        a + frac * width
+    } else {
+        a * (1.0 - frac) + b * frac
+    };
+    // Preserve order across adjacent intervals if rounding overshoots b.
+    if result > b {
+        b
+    } else {
+        result
+    }
 }
 
 /// Internal: row-major model evaluation. Mirrors `saltelli2010`
@@ -609,6 +630,25 @@ mod tests {
     }
 
     // ── percentile helper ───────────────────────────────────────────
+
+    #[test]
+    fn kani_regression_percentile_equal_smallest_subnormals() {
+        let tiny = f64::from_bits(1);
+        let sorted = [tiny; 2];
+        assert_eq!(percentile_value(&sorted, 0.0).to_bits(), 1);
+        assert_eq!(percentile_value(&sorted, 0.5).to_bits(), 1);
+        assert_eq!(percentile_value(&sorted, 1.0).to_bits(), 1);
+        assert_eq!(percentile_ci(&sorted, 0.0, 0.5), (tiny, tiny));
+    }
+
+    #[test]
+    fn kani_regression_percentile_seven_element_subnormal_witness() {
+        let tiny = f64::from_bits(1);
+        let sorted = [tiny, tiny, tiny, 1.0, 2.0, 3.0, 4.0];
+        assert_eq!(percentile_value(&sorted, 0.0).to_bits(), 1);
+        assert_eq!(percentile_value(&sorted, 0.25).to_bits(), 1);
+        assert_eq!(percentile_ci(&sorted, 0.0, 0.25), (tiny, tiny));
+    }
 
     #[test]
     fn percentile_value_at_zero_is_min() {

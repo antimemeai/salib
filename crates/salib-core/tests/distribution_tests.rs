@@ -47,6 +47,48 @@ fn uniform_maps_unit_interval_linearly() {
 }
 
 #[test]
+fn kani_regression_discrete_uniform_inclusive_size_overflow() {
+    let d = Distribution::DiscreteUniform {
+        lo: i64::MIN / 2,
+        hi: i64::MAX / 2,
+    };
+    assert_eq!(d.quantile(0.5), 0.0);
+
+    let full = Distribution::DiscreteUniform {
+        lo: i64::MIN,
+        hi: i64::MAX,
+    };
+    assert_eq!(full.quantile(0.25), (i64::MIN / 2) as f64);
+    assert_eq!(full.quantile(0.5), 0.0);
+    assert_eq!(full.quantile(0.75), (1_i64 << 62) as f64);
+    assert_monotone(full);
+}
+
+#[test]
+fn kani_regression_discrete_uniform_rounded_upper_endpoint() {
+    let d = Distribution::DiscreteUniform {
+        lo: -18_014_398_509_481_985,
+        hi: 0,
+    };
+    assert_eq!(d.quantile(0.0), -18_014_398_509_481_985_i64 as f64);
+    assert_eq!(d.quantile(1.0), 0.0);
+    assert_eq!(d.quantile(1.5), 0.0);
+    assert_monotone(d);
+}
+
+#[test]
+fn kani_regression_uniform_extreme_finite_bounds() {
+    let d = Distribution::Uniform {
+        lo: -f64::MAX,
+        hi: f64::MAX,
+    };
+    assert_eq!(d.quantile(0.0), -f64::MAX);
+    assert_eq!(d.quantile(0.5), 0.0);
+    assert_eq!(d.quantile(1.0), f64::MAX);
+    assert_monotone(d);
+}
+
+#[test]
 fn triangular_hits_support_boundaries() {
     let d = Distribution::Triangular {
         lo: -1.0,
