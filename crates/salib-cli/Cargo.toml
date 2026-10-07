@@ -1,12 +1,12 @@
 [package]
 name = "salib-cli"
-version = "0.2.0"
+version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = """
-CLI binary for salib: sample, run, and analyze sensitivity analyses.
+Reserved CLI package for salib; sampling and analysis commands are not yet implemented.
 """
 
 [[bin]]
@@ -19,10 +19,10 @@ doc = false
 path = "src/lib.rs"
 
 [dependencies]
-salib-core = { version = "0.2.0", path = "../salib-core" }
-salib-samplers = { version = "0.2.0", path = "../salib-samplers" }
-salib-estimators = { version = "0.2.0", path = "../salib-estimators" }
-salib-validation = { version = "0.2.0", path = "../salib-validation" }
+salib-core = { version = "0.3.0", path = "../salib-core" }
+salib-samplers = { version = "0.3.0", path = "../salib-samplers" }
+salib-estimators = { version = "0.3.0", path = "../salib-estimators" }
+salib-validation = { version = "0.3.0", path = "../salib-validation" }
 
 [dev-dependencies]
 

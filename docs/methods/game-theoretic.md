@@ -1,19 +1,16 @@
-# Game-Theoretic Methods
+# Game-theoretic methods
 
-Shapley effects — attribute output variance via cooperative game theory.
+Shapley effects allocate output variance, including interactions, among inputs.
+salib supports independent inputs. Its `sh` vector is in output-variance units;
+divide by `var_y` for dimensionless shares.
 
-> **When to use:** Allocate variance, including interactions, across independent
-> inputs. The theory supports dependence with appropriate conditional sampling,
-> but salib implements independent marginals only. It cannot perform correlated-input
-> Shapley analysis. Its `sh` vector is in output-variance units;
-> divide by `var_y` for dimensionless shares. Population inequalities do not
-> guarantee the same ordering for finite-sample estimates.
-
----
+The theory also covers dependent inputs with appropriate conditional sampling,
+which this implementation does not provide. The population identities below
+do not guarantee the same ordering for finite-sample estimates.
 
 ## Shapley Effects
 
-Song, Nelson & Staum (2016) *SIAM/ASA J. Unc. Quant.* 4(1), 1060–1083. [[bib]](../bibliography.md#song2016)
+Song, Nelson & Staum (2016) *SIAM/ASA J. Unc. Quant.* 4(1), 1060–1083. [paper](https://users.iems.northwestern.edu/~nelsonb/Publications/SongNelsonStaum.pdf) · [reference](../bibliography.md#song2016)
 
 ### Theory
 
@@ -27,17 +24,18 @@ The defining property (Song 2016 Eq 10):
 
 $$\sum_{i=1}^{d} \text{Sh}_i = \operatorname{Var}(Y)$$
 
-This is an identity for population, unnormalized Shapley values, including
-dependent-input games with the correct conditional law. It is not a statement
-about exact equality of finite-sample estimates. First-order and total-order Sobol' indices lack this property under correlation. For independent inputs, Song 2016 Theorem 2 gives the ordering:
+This is an identity for unnormalized population Shapley effects, including
+dependent-input games with the correct conditional law. For independent
+inputs, splitting nonnegative interaction components equally implies:
 
 $$V_i \leq \text{Sh}_i \leq V_{T_i}$$
 
-where $V_i = \operatorname{Var}\!\big[\mathbb{E}(Y \mid X_i)\big]$ is the first-order variance contribution and $V_{T_i} = \mathbb{E}\!\big[\operatorname{Var}(Y \mid X_{-i})\big]$ is the total-effect variance contribution. Shapley splits interaction effects evenly across the participating factors instead of assigning them entirely to either the main-effect or total-effect bucket.
+where $V_i = \operatorname{Var}\!\big[\mathbb{E}(Y \mid X_i)\big]$ is the first-order variance contribution and $V_{T_i} = \mathbb{E}\!\big[\operatorname{Var}(Y \mid X_{-i})\big]$ is the total-effect variance contribution. For independent inputs, Shapley divides each interaction contribution equally among the factors involved.
 
 ### Algorithm
 
-Direct evaluation requires $2^d$ coalition costs and $d!$ permutations — infeasible beyond $d \approx 10$. The implementation uses Song 2016 Algorithm 1, which combines three ideas:
+Enumerating all coalitions and permutations becomes expensive as $d$ grows.
+The implementation uses Song 2016 Algorithm 1:
 
 1. **Random-permutation sampling** (Castro-Gomez-Cazorla 2009): sample $m$ random permutations $\pi_1, \ldots, \pi_m$ of $\{1,\ldots,d\}$ and accumulate marginal contributions $\hat{\Delta}_{\pi(j)} = \hat{c}(\text{prefix}_j) - \hat{c}(\text{prefix}_{j-1})$ along each permutation.
 
@@ -74,9 +72,18 @@ let result = estimate_shapley(
 println!("{result}");
 ```
 
-> **Budget guidance** (Song 2016 Appendix B): set $N_I = 3$, $N_O = 1$, and let $m$ consume the remaining computational budget. Use $N_V \geq 1000$ for a stable variance estimate.
+For randomly sampled permutations, [Song et al., Appendix B, Claim 2](https://users.iems.northwestern.edu/~nelsonb/Publications/SongNelsonStaum.pdf),
+recommend $N_I=3$, $N_O=1$, and spending the remaining budget on $m$.
+Choose $N_V$ separately by checking stability of the variance estimate.
+Theorem 3's variance bound assumes exact coalition costs; it does not bound
+the error of this nested Monte Carlo implementation.
 
-### Verify
+Each sampled permutation telescopes to the same estimated total variance.
+Thus the sum of salib's contributions differs from `var_y` through rounding
+and tiny-negative clamping, not Monte Carlo sampling error. Individual
+contributions still have sampling error.
+
+### Additive-model example
 
 Linear-additive model: $Y = X_1 + 2X_2 + 3X_3$, $X_i \sim \mathcal{N}(0, 1)$ independent. Analytic: $\operatorname{Var}(Y) = 14$, $\text{Sh}_i = a_i^2$ (no interactions, so $\text{Sh}_i = V_i = V_{T_i}$).
 
@@ -87,4 +94,5 @@ Linear-additive model: $Y = X_1 + 2X_2 + 3X_3$, $X_i \sim \mathcal{N}(0, 1)$ ind
 | $X_3$  | 9.0                    | within 5% MC tolerance                |
 | $\sum$ | 14.0                   | $\approx \widehat{\operatorname{Var}}(Y)$ |
 
-> **Caveat:** The current implementation handles independent inputs only. Dependent-input Shapley (conditional sampling via copulas or Rosenblatt transforms) is planned for a future release.
+Dependent-input Shapley effects would require conditional sampling, which is
+not implemented.

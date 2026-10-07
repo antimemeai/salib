@@ -1,14 +1,12 @@
-# Experimental Design Methods
+# Experimental design methods
 
-Classical design-of-experiments instruments — variance decomposition, measurement reliability, space-filling quality, and screening designs.
-
-> **When to use:** You have a structured experimental layout (balanced grid, crossed facets, factorial design) or need to evaluate the quality of a sampling plan. These methods operate on observed data arranged in known designs, not on black-box model evaluations with random sampling.
-
----
+These methods analyze balanced grids, measurement designs, and two-level
+experiments. Discrepancy measures compare how evenly sampling points fill
+the input space.
 
 ## ANOVA
 
-Fisher (1925) *Statistical Methods for Research Workers*. [[bib]](../bibliography.md#fisher1925)
+Fisher (1925) *Statistical Methods for Research Workers*. [paper](https://www.usablebuildings.co.uk/UsableBuildings/Unprotected/ClassicsFisher1925.pdf) · [reference](../bibliography.md#fisher1925)
 
 ### Theory
 
@@ -22,7 +20,9 @@ Each mean square $MS = SS / df$ is tested against an appropriate denominator via
 
 $$F_A = \frac{MS_A}{MS_{AB}}, \quad F_B = \frac{MS_B}{MS_{AB}}$$
 
-with $p$-values from the Fisher-Snedecor distribution. A significant $F$-ratio means the factor's effect is larger than expected from the interaction noise alone.
+The API computes upper-tail $p$-values from an $F$ distribution using these
+ratios. Their inferential interpretation requires a model that justifies
+the denominator and distributional assumptions; the grid alone does not.
 
 The three-way extension adds factors $A \times B \times C$ with all two-way and three-way interaction terms. The implementation uses the three-way interaction $MS_{ABC}$ as the error denominator for all $F$-tests (unreplicated balanced design — no pure-error term exists).
 
@@ -77,13 +77,18 @@ let result = estimate_anova_two_way_with_bootstrap(
 ).unwrap();
 ```
 
-> **Note:** The implementation operates on unreplicated balanced grids. The residual sum of squares is identically zero — inferential $F$-tests use the interaction mean square as the denominator, following the classical unreplicated two-way design convention.
-
----
+These grids have one observation per cell, so pure error and the highest-order
+interaction cannot be estimated separately. The API assigns the remaining sum
+of squares to that interaction and reports residual zero. Its chosen $F$
+denominators are implementation conventions, not generally valid tests for
+every fixed, random, or mixed-effects design. Use the sums of squares
+descriptively unless your statistical model justifies those tests. See the
+[NIST two-way ANOVA formulas](https://www.itl.nist.gov/div898/handbook/prc/section4/prc437.htm)
+for the distinction between interaction and replicated pure error.
 
 ## G-Theory
 
-Brennan (2001) *Generalizability Theory*, Springer. [[bib]](../bibliography.md#brennan2001)
+Brennan (2001) *Generalizability Theory*, Springer. [paper](https://link.springer.com/book/10.1007/978-1-4757-3456-0) · [reference](../bibliography.md#brennan2001)
 
 ### Theory
 
@@ -144,32 +149,42 @@ let result = estimate_g_theory_pir_with_bootstrap(
 ).unwrap();
 ```
 
-> **When to use:** Measurement study design — deciding how many raters, items, or occasions are needed to achieve a target reliability. The D-study projection avoids costly pilot studies by extrapolating from a single G-study.
+Use a D-study to estimate how reliability would change with more or fewer
+items and raters, using variance components from an existing G-study.
 
-> **Scope:** Only the fully crossed $p \times i \times r$ design is implemented. Nested and mixed designs are planned for a future release.
-
----
+Only fully crossed $p \times i \times r$ designs are implemented. The formulas
+here treat items and raters as random facets and persons as the objects of
+measurement. Fixed facets require different error terms. D-study projections
+reuse the estimated variance components; they do not account for changes in
+the population or measurement process. See [Brennan's overview, §2](https://www.na-mic.org/w/img_auth.php/1/15/Generalizability_theory_and_example.pdf).
 
 ## Discrepancy
 
-Hickernell (1998) in *Monte Carlo and Quasi-Monte Carlo Methods 1996*, Springer. [[bib]](../bibliography.md#hickernell1998)
+Hickernell (1998) *Mathematics of Computation* 67(221), 299–322. [paper](https://doi.org/10.1090/S0025-5718-98-00894-1) · [reference](../bibliography.md#hickernell1998)
 
 ### Theory
 
-Discrepancy measures how uniformly a point set fills the unit hypercube $[0, 1]^d$. Lower discrepancy implies better space-filling and, by the Koksma-Hlawka inequality, lower quasi-Monte Carlo integration error:
+Discrepancy measures how evenly a point set fills $[0,1]^d$. Different
+discrepancies correspond to different integration-error bounds. For example,
+the classical Koksma–Hlawka inequality uses star discrepancy:
 
 $$\left|\int_{[0,1]^d} f(\mathbf{x})\,d\mathbf{x} - \frac{1}{N}\sum_{i=1}^{N} f(\mathbf{x}_i)\right| \leq D^*(P_N) \cdot V(f)$$
 
-where $D^*(P_N)$ is the star discrepancy of the point set and $V(f)$ is the variation of $f$ in the sense of Hardy and Krause.
+where $D^*(P_N)$ is star discrepancy and $V(f)$ is Hardy–Krause variation,
+assumed finite. This API returns L2-star, centered, wrap-around, and modified
+discrepancies; none can simply be substituted for $D^*$ in that inequality.
+[Hickernell (1998)](https://doi.org/10.1090/S0025-5718-98-00894-1) develops
+generalized bounds with matching variation measures. All four API results
+are square roots of the corresponding squared-discrepancy formulas.
 
 Four discrepancy measures are computed simultaneously:
 
 | Measure | Description |
 |---------|-------------|
-| **Centered (CD)** | Hickernell 1998 Eq 3.8. Symmetric around 0.5. |
-| **Wrap-around (WD)** | Hickernell 1998 Eq 3.10. Invariant to coordinate shifts modulo 1. |
-| **Modified (MD)** | Fang et al. 2006. Penalizes boundary clustering more heavily. |
-| **L2-star** | Niederreiter 1992. The classical L2 star discrepancy. |
+| **Centered (CD)** | Uses distances from the cube center and pairwise coordinate distances. |
+| **Wrap-around (WD)** | Uses periodic pairwise coordinate distances. |
+| **Modified (MD)** | A distinct kernel formula; compare values only within the same measure. |
+| **L2-star** | L2 norm of the error in volumes of boxes anchored at the origin. |
 
 ### Code
 
@@ -177,9 +192,9 @@ Four discrepancy measures are computed simultaneously:
 use salib::estimators::compute_discrepancy;
 use ndarray::Array2;
 
-// Evaluate a 100-point Sobol' sequence in 3 dimensions
+// Illustrative 100-point set in three dimensions
 let sample = Array2::<f64>::from_shape_fn((100, 3), |(i, j)| {
-    // (placeholder — use your actual sample matrix)
+    // Replace this placeholder with your sampling design.
     ((i * 7 + j * 13) % 100) as f64 / 100.0
 });
 
@@ -187,17 +202,18 @@ let result = compute_discrepancy(sample.view()).unwrap();
 println!("{result}");
 ```
 
-> **Use case:** Evaluate and compare the quality of sampling designs — LHS vs Sobol' sequence vs Halton sequence vs random. Lower discrepancy values indicate better space-filling. All input values must lie in $[0, 1]$; rescale if needed.
-
----
+Evaluate and compare the quality of sampling designs — LHS vs Sobol' sequence vs Halton sequence vs random. Lower discrepancy values indicate better space-filling. All input values must lie in $[0, 1]$; rescale if needed.
 
 ## Fractional Factorial
 
-Box, Hunter & Hunter (1978) *Statistics for Experimenters*, Wiley. [[bib]](../bibliography.md#box1978)
+Box, Hunter & Hunter (1978) *Statistics for Experimenters*, Wiley. [paper](https://openlibrary.org/works/OL2181531W/Statistics_for_experimenters) · [reference](../bibliography.md#box1978)
 
 ### Theory
 
-A $2^{k-p}$ fractional factorial runs a fraction of the full factorial design to estimate main effects and (when resolution permits) two-factor interactions. The implementation uses Plackett-Burman designs — a family of two-level screening designs where $N$ runs (a multiple of 4) can screen up to $N - 1$ factors.
+A $2^{k-p}$ fractional factorial runs a fraction of the full factorial design to estimate main effects and (when resolution permits) two-factor interactions. The implementation uses Plackett–Burman designs, which screen up to $N-1$
+factors in supported multiples of four runs. These are not generally regular
+$2^{k-p}$ fractions. Main effects may be confounded with interactions; see
+[NIST's Plackett–Burman guide](https://www.itl.nist.gov/div898/handbook/pri/section3/pri335.htm).
 
 For each factor $i$, the main effect is the difference in mean response between the high (+1) and low (-1) levels:
 
@@ -228,9 +244,9 @@ let effects = estimate_fractional_factorial(&design, &problem, |x| {
 println!("{effects}");
 ```
 
-> **When to use:** Classical DoE screening — identify which factors have large main effects using the fewest runs possible. Most useful when you have a physical experiment (not just a computer model) and runs are expensive. For computer models with cheap evaluations, variance-based methods (Sobol') or Morris screening are usually preferable.
-
----
+Plackett–Burman designs screen many factors with relatively few runs. They
+are useful for expensive experiments when main effects are the priority.
+Interpret those effects with the design's interaction confounding in mind.
 
 ## Choosing among experimental design methods
 

@@ -1,6 +1,6 @@
 [package]
 name = "salib-validation"
-version = "0.2.0"
+version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -14,7 +14,7 @@ sensitivity indices for validation and benchmarking.
 path = "src/lib.rs"
 
 [dependencies]
-salib-core = { version = "0.2.0", path = "../salib-core" }
+salib-core = { version = "0.3.0", path = "../salib-core" }
 serde = { version = "1", features = ["derive"], optional = true }
 
 [features]

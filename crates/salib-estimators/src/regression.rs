@@ -1,46 +1,25 @@
-//! Regression-based sensitivity indices: SRC, SRRC, PCC, PRCC,
-//! plus `R²` diagnostics for the linear and rank-linear regressions.
+//! Regression coefficients and partial correlations on raw and ranked data.
 //!
+//! SRC standardizes an OLS coefficient by the input/output standard deviations.
+//! SRRC applies SRC to ranks. PCC correlates the residuals obtained by regressing
+//! an input and the output on the other inputs; PRCC applies that procedure to
+//! ranks. Inspect fit diagnostics and residuals. No fixed R² threshold proves
+//! the indices adequate, and rank coefficients are not generally Sobol' indices.
 //!
+//! # Tied observations
 //!
-//! # The four estimators
+//! Equal values receive the average of their occupied one-based ranks, so ties
+//! do not introduce a row-order association. This is the usual rank treatment;
+//! see [Marino et al. (2008), §2.1 and footnote 3](https://pmc.ncbi.nlm.nih.gov/articles/PMC2570191/).
 //!
-//! - **SRC (Standardized Regression Coefficient)** —
-//!   `β̂ᵢ · σ_{Xᵢ} / σ_Y` from the OLS fit `Y ≈ β₀ + β·X`.
-//!   Trustworthy when the model is approximately linear; pin by
-//!   `r²_linear > 0.7`.
+//! # Cost and reproducibility
 //!
-//! - **SRRC (Standardized Rank Regression Coefficient)** — SRC
-//!   computed on rank-transformed `(X, Y)`. Trustworthy when the
-//!   model is approximately monotonic; pin by `r²_rank > 0.7`.
+//! PCC and PRCC refit two regressions per factor. Dense normal equations and
+//! Cholesky solves cost O(N d³ + d⁴) overall, plus rank sorting. Results are
+//! reproducible for the same ordered data, binary, and platform.
 //!
-//! - **PCC (Partial Correlation Coefficient)** — Pearson
-//!   correlation between residuals of `Xᵢ` and `Y` after each is
-//!   regressed on the *other* `X` factors. Captures `Xᵢ`'s unique
-//!   linear contribution after partialing out other factors.
-//!
-//! - **PRCC (Partial Rank Correlation Coefficient)** — PCC on
-//!   ranks. Captures monotonic partial contribution.
-//!
-//! All four are sampler-agnostic — work on any `(X, Y)` from any
-//! sampler. **None recover Sobol' indices** unless the model is
-//! linear (SRC) or monotonic (SRRC/PRCC). The `R²` diagnostics are
-//! the load-bearing trust signal.
-//!
-//! # Why these alongside Sobol'/Morris/etc.
-//!
-//! Cheap relative to variance-based methods. The PCC/PRCC path
-//! re-fits OLS once per factor (residualizing on every other
-//! factor), so the asymptotic is `O(N · d³)` for typical `d`.
-//! Could be reduced to `O(N · d² + d³)` by inverting `XᵀX` once
-//! and deriving partial correlations from the inverse —
-//! eligible if a workload pushes `d` past ~50.
-//!
-//! # Bit-reproducibility
-//!
-//! Pure under `(X, Y)`. OLS via normal equations + Cholesky
-//! solve (`nalgebra`). Stable rank with `partial_cmp(...)
-//! .unwrap_or(Equal)`. Same `(X, Y)` in → bit-identical output.
+//! [Saltelli and Marivoet (1990)](https://doi.org/10.1016/0951-8320%2890%2990065-U)
+//! discusses regression and rank-based sensitivity measures.
 
 #![allow(
     clippy::similar_names,
@@ -58,18 +37,15 @@ use salib_core::tree_sum;
 
 /// Regression-based sensitivity indices and `R²` diagnostics.
 ///
-/// `#[non_exhaustive]` — future fields (`bootstrap_ci`,
-/// `condition_number` of the design matrix for ill-conditioning
-/// detection) land non-breaking.
+/// Fields include both linear and rank-regression fit diagnostics.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct RegressionIndices {
-    /// Standardized regression coefficients, length `d`. Trust if
-    /// `r²_linear > 0.7`.
+    /// Standardized regression coefficients, length `d`. Inspect `r2_linear`.
     pub src: Vec<f64>,
     /// Standardized rank regression coefficients, length `d`.
-    /// Trust if `r²_rank > 0.7`.
+    /// Inspect `r2_rank`; tied values receive average ranks.
     pub srrc: Vec<f64>,
     /// Partial correlation coefficients, length `d`.
     pub pcc: Vec<f64>,
@@ -219,12 +195,12 @@ pub fn estimate_regression_indices(
     let mut x_rank = Array2::<f64>::zeros((n, d));
     for j in 0..d {
         let col: Vec<f64> = (0..n).map(|k| x[[k, j]]).collect();
-        let r = ordinal_ranks_f64(&col);
+        let r = average_ranks_f64(&col);
         for k in 0..n {
             x_rank[[k, j]] = r[k];
         }
     }
-    let y_rank = ordinal_ranks_f64(y);
+    let y_rank = average_ranks_f64(y);
 
     let (srrc, prcc, r2_rank) = compute_src_pcc_r2(x_rank.view(), &y_rank)?;
 
@@ -398,9 +374,7 @@ fn pearson_correlation(a: &[f64], b: &[f64]) -> f64 {
     }
 }
 
-/// Population variance (1/n divisor; not Bessel) — matches the
-/// scaling used in `SALib`'s regression module so SRC values are
-/// directly comparable.
+/// Population variance with divisor `N`, matching the output scaling used here.
 fn sample_variance(v: &[f64]) -> f64 {
     let n = v.len() as f64;
     let mean = tree_sum(v) / n;
@@ -408,15 +382,22 @@ fn sample_variance(v: &[f64]) -> f64 {
     sq_sum / n
 }
 
-/// Ordinal ranks (1..=N, stable tie-break by input order). Same
-/// posture as `pawn::ordinal_ranks` but typed to `f64` directly
-/// for use as regression input.
-fn ordinal_ranks_f64(data: &[f64]) -> Vec<f64> {
+/// One-based ranks; each equal-value block receives its mean occupied rank.
+fn average_ranks_f64(data: &[f64]) -> Vec<f64> {
     let mut idx: Vec<usize> = (0..data.len()).collect();
     idx.sort_by(|&a, &b| data[a].partial_cmp(&data[b]).unwrap_or(Ordering::Equal));
     let mut ranks = vec![0.0_f64; data.len()];
-    for (rank, &i) in idx.iter().enumerate() {
-        ranks[i] = (rank + 1) as f64;
+    let mut start = 0;
+    while start < idx.len() {
+        let mut end = start + 1;
+        while end < idx.len() && data[idx[end]] == data[idx[start]] {
+            end += 1;
+        }
+        let mean_rank = (start as f64 + 1.0 + end as f64) / 2.0;
+        for &i in &idx[start..end] {
+            ranks[i] = mean_rank;
+        }
+        start = end;
     }
     ranks
 }
@@ -652,9 +633,36 @@ mod tests {
     }
 
     #[test]
-    fn ordinal_ranks_one_indexed() {
+    fn average_ranks_one_indexed() {
         let data = [3.0, 1.0, 2.0];
-        assert_eq!(ordinal_ranks_f64(&data), vec![3.0, 1.0, 2.0]);
+        assert_eq!(average_ranks_f64(&data), vec![3.0, 1.0, 2.0]);
+    }
+
+    #[test]
+    fn tied_ranks_use_the_mean_of_occupied_positions() {
+        // The zeros occupy ranks 1 and 2, the twos ranks 4 through 6.
+        assert_eq!(
+            average_ranks_f64(&[2.0, -0.0, 1.0, 2.0, 0.0, 2.0]),
+            vec![5.0, 1.5, 3.0, 5.0, 1.5, 5.0]
+        );
+    }
+
+    #[test]
+    fn independent_tied_binary_data_has_zero_rank_association() {
+        // Balanced 2x2 table: each value of X sees the same distribution of Y.
+        let x = ndarray::array![[0.0], [0.0], [1.0], [1.0]];
+        let y = [0.0, 1.0, 0.0, 1.0];
+        for order in [[0, 1, 2, 3], [1, 0, 3, 2], [3, 1, 0, 2]] {
+            let permuted_x = Array2::from_shape_fn((4, 1), |(row, _)| x[[order[row], 0]]);
+            let permuted_y: Vec<_> = order.iter().map(|&row| y[row]).collect();
+            let result = estimate_regression_indices(permuted_x.view(), &permuted_y).unwrap();
+            for coefficient in [result.src[0], result.pcc[0], result.srrc[0], result.prcc[0]] {
+                assert!(
+                    coefficient.abs() < 1e-12,
+                    "spurious association: {coefficient}"
+                );
+            }
+        }
     }
 
     // ── d=1 special case (no "other factors" for partial corr) ───

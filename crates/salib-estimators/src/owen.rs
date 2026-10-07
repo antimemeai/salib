@@ -1,56 +1,30 @@
-//! Owen 2013 "Correlation 2" first-order Sobol' estimator —
-//! variance-optimal in the small-`Sᵢ` regime.
+//! Owen's Correlation 2 estimator for first-order Sobol' indices.
 //!
-//! Per Owen 2013 ("Better estimation of small Sobol' sensitivity
-//! indices", ACM TOMACS 23(2)). Uses **three** independent random
-//! vectors `(x, y, z)` (= `A`, `B`, `C` in our notation) instead
-//! of the two-vector `(A, B)` design Saltelli 2010 uses. Achieves
-//! `O(ε⁴)` variance in the "total insensitivity limit" (where all
-//! factor-of-interest variances scale as `ε`); Saltelli 2010 attains
-//! only `O(ε²)` in the same limit (Owen 2013 § 6).
-//!
-//! # Formula (Owen Eq 7, "Correlation 2")
-//!
-//! For each factor `i` (with `u = {i}`):
+//! [Owen (2013)](https://doi.org/10.1145/2457459.2457460) uses three
+//! independent input vectors. The Correlation 2 formula appears in
+//! [the preprint, Section 3](https://arxiv.org/abs/1204.4763).
+//! For each input `i`, this implementation computes
 //!
 //! ```text
-//! S_i = (1/N) Σ_j (f(A_j) − f(A_Cⁱ_j)) · (f(B_Aⁱ_j) − f(B_j)) / Var(Y)
-//!
-//! where:
-//!     f(A_j)        — full random sample
-//!     f(A_Cⁱ_j)     — A with col i from C  ("z_{i,u}:x_{i,−u}" in Owen's notation)
-//!     f(B_Aⁱ_j)     — B with col i from A  ("x_{i,u}:y_{i,−u}")
-//!     f(B_j)        — full random sample
+//! S_i = mean((f(A) - f(A_Cⁱ)) * (f(B_Aⁱ) - f(B))) / D,
 //! ```
 //!
-//! Cost: `n · (3 + 2d)` model evaluations vs Saltelli2010's `n(d + 2)`.
-//! Owen pays roughly **2× the model-eval budget** for substantially
-//! better MC variance on factors near `S_i = 0`.
+//! where `A_Cⁱ` replaces column `i` of `A` with `C`, `B_Aⁱ` replaces
+//! column `i` of `B` with `A`, and `D` is the pooled `A,B` output variance
+//! with divisor `2N`. The ratio uses an estimated denominator; the
+//! paper's unbiasedness result for the numerator does not make the ratio
+//! unbiased.
 //!
-//! # When to use
+//! Random centering can reduce variance when an input has little total
+//! influence. A small first-order index alone does not guarantee this:
+//! the input may still have large interaction effects. Performance
+//! depends on the model and sampling design.
 //!
-//! Per Owen 2013 Table 1 + § 4:
-//!
-//! - **Use Owen** when most factors are unimportant (typical for
-//!   high-dimensional screening), or when you specifically need
-//!   tight CIs on small-`Sᵢ` factors.
-//! - **Use Saltelli2010 / Janon** when factor variances are
-//!   moderate-to-large; Owen offers no advantage and pays the
-//!   doubled-cost penalty.
-//! - **Use Janon** when you want the asymptotically efficient
-//!   estimator at the standard `n(d + 2)` cost.
-//!
-//! # What this module ships
-//!
-//! - `OwenIndices` — first-order `S_i` per factor. No total-order;
-//!   Owen 2013 concerns first-order only. Pair with Jansen 1999
-//!   (PR 7) for total-order.
-//!
-//! # Bit-reproducibility
-//!
-//! Pure under `(matrix, model)`. All sums route through
-//! `tree_sum` / `tree_dot`. Same matrix + model in → bit-identical
-//! output.
+//! The estimator evaluates `A`, `B`, and both hybrid families, for
+//! `N(2+2d)` calls. It does not evaluate `C` directly. `OwenMatrix`'s
+//! `total_evaluations()` includes `C` and reports `N(3+2d)`.
+//! The result has first-order indices only. For total effects, use
+//! [`crate::estimate_saltelli2010`] with a separate Saltelli design.
 
 #![allow(
     clippy::similar_names,
@@ -65,8 +39,6 @@ use salib_core::tree_sum;
 use salib_samplers::OwenMatrix;
 
 /// First-order Sobol' indices via Owen Correlation 2.
-///
-/// `#[non_exhaustive]` — future fields land non-breaking.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
@@ -75,9 +47,7 @@ pub struct OwenIndices {
     pub first_order: Vec<f64>,
     /// Total variance estimated from the joint `(A, B)` samples.
     pub total_variance: f64,
-    /// Second-order indices. Always `None` for Owen — the 3-matrix
-    /// `(A, B, C)` design lacks the `A_B` matrices needed for the
-    /// Saltelli 2010 Eq d formula.
+    /// Second-order indices; always `None` in this implementation.
     pub second_order: Option<Vec<Vec<f64>>>,
 }
 
@@ -131,11 +101,7 @@ where
         .map(|m| evaluate_rows(m, &model))
         .collect();
 
-    // Total variance via the pooled `A ∪ B` sample (2N values
-    // total). Owen 2013 Tables 2-3 use the analytic σ² as
-    // denominator; the paper does not pin a specific empirical
-    // pool. Pooling A and B is lower-variance than using either
-    // alone and consistent with the paper's spirit.
+    // This implementation estimates the denominator from pooled A,B outputs.
     let mut combined = Vec::with_capacity(2 * n);
     combined.extend_from_slice(&fa);
     combined.extend_from_slice(&fb);
@@ -148,7 +114,7 @@ where
 
     let mut first_order = Vec::with_capacity(d);
     for i in 0..d {
-        // Owen Eq 7 / Correlation 2:
+        // Owen Correlation 2:
         //   S_i ∝ (1/N) Σ (f(A) − f(A_Cⁱ)) · (f(B_Aⁱ) − f(B)).
         let terms: Vec<f64> = (0..n)
             .map(|j| (fa[j] - fac[i][j]) * (fba[i][j] - fb[j]))

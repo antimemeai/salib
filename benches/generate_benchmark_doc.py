@@ -5,7 +5,7 @@ Generate docs/benchmarks.md from Criterion results.
 Reads: target/criterion/*/new/estimates.json
 Writes: docs/benchmarks.md
 
-All numbers flow from data. No manual entry.
+Timing tables are generated from the recorded Criterion medians.
 """
 
 import argparse
@@ -78,7 +78,7 @@ def main():
 
     w("# Benchmarks")
     w("")
-    w("Current measurements for the subset of methods in [the harness](../benches/sensitivity.rs), plus sampling. This is a timing comparison, not an estimator accuracy test.")
+    w("Timings for the methods and samplers in [the benchmark harness](../benches/sensitivity.rs). Accuracy must be checked separately.")
     w("")
     w("## Methodology")
     w("")
@@ -86,11 +86,11 @@ def main():
     w("")
     w(f"[Criterion](https://github.com/bheisler/criterion.rs) 0.5; {args.sample_size} samples per benchmark; {args.warm_up_time:g} s warmup and {args.measurement_time:g} s requested measurement time. Statistic: **median** of Criterion's per-iteration timing estimates.")
     w("")
-    w("These local release-build measurements are for orientation. The requested window is short; Criterion extends collection when 100 samples need longer and reports outliers. They are not precise cross-machine performance claims. Repeat with longer windows on your target hardware; concurrent processes and thermal state affect timing.")
+    w("These release-build measurements used short timing windows. Criterion extends collection when the requested sample count needs longer and reports outliers. For performance decisions, repeat with longer windows on the target hardware; other processes and machine temperature affect timings.")
     w("")
-    w("**Workload:** the Ishigami formula with three inputs. The current harness feeds unit-cube samples directly, so this is **not** canonical Ishigami on `[-pi,pi]`. Sobol\' G uses eight unit-cube inputs. These timings do not establish convergence to canonical analytic indices.")
+    w("**Workload:** the three-input Ishigami formula evaluated on unit-cube samples. This differs from its canonical `[-pi,pi]` input range. Sobol\' G uses eight unit-cube inputs. These timings do not establish convergence to canonical analytic indices.")
     w("")
-    w("**What is timed:** [fn] methods include model evaluation and estimation on a prebuilt design; sampling is outside their timed loops. Given-data methods time analysis of precomputed inputs/outputs. DGSM excludes gradient acquisition and output-variance computation. Sampling rows time design construction separately.")
+    w("**Timed operations:** [fn] methods include model evaluation and estimation on a prebuilt design; sampling is outside their timed loops. Given-data methods time analysis of precomputed inputs/outputs. DGSM excludes gradient acquisition and output-variance computation. Sampling rows time design construction separately.")
     w("")
 
     # ── Analysis benchmarks ──
@@ -113,7 +113,7 @@ def main():
     # ── Morris note ──
     w("Morris $N$ is trajectory count $r$; total evaluations are $r \\times (d + 1)$.")
     w("")
-    w("FAST $N$ values are odd (required by the algorithm).")
+    w("The benchmark uses odd FAST sample counts. These recorded timings predate the 0.3.0 correctness fixes; rerun the harness to measure the corrected algorithms.")
     w("")
 
     # ── Sampling benchmarks ──

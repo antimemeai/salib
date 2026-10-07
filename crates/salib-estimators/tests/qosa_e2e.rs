@@ -1,19 +1,9 @@
-//! End-to-end reviewer-affordance contract close for `estimate_qosa`
-//! — Maume-Deschamps & Niang 2018 partition-based estimator.
+//! Deterministic empirical-partition QOSA fixtures.
 //!
-//! Three load-bearing scenarios:
-//!
-//! 1. **Ishigami at α = 0.5**: factor ordering recovers
-//!    `S_2 > S_1 > S_3 ≈ 0` — the same ranking as variance-based
-//!    first-order Sobol' on Ishigami canonical (S_2 = 0.44, S_1 =
-//!    0.31, S_3 = 0).
-//! 2. **Sanity properties** from Maume-Deschamps § 2 Remark:
-//!    independent factor → index ≈ 0; fully-determining factor →
-//!    index → 1.
-//! 3. **Tail-α distinguishing feature**: synthetic gated model
-//!    where the median-driver and tail-driver are different
-//!    factors. QOSA correctly switches its top-ranked factor as α
-//!    moves from 0.5 to 0.95.
+//! Ishigami and gated-model checks describe these chosen samples, not
+//! universal factor-ordering rules or an implementation of the paper's
+//! kernel/two-sample estimator. Analytic contrast and invariance checks
+//! live in distribution_invariants.rs.
 
 #![allow(
     clippy::float_cmp,
@@ -63,8 +53,8 @@ fn ishigami_qosa_at_median_orders_factors_like_first_order_sobol() {
     let y = ishigami_outputs(&x);
     let result = estimate_qosa(x.view(), &y, 0.5).expect("QOSA fit");
     // Ishigami first-order Sobol' ordering: S_2 (0.44) > S_1 (0.31) > S_3 (0).
-    // QOSA at the median should land in the same ordering — even
-    // though the magnitudes differ from Sobol'.
+    // This particular sample has the same ordering; QOSA and Sobol'
+    // rankings need not agree on other models or quantile levels.
     assert!(
         result.s[1] > result.s[0],
         "S^α_2 = {:.3} should exceed S^α_1 = {:.3}",
@@ -77,9 +67,8 @@ fn ishigami_qosa_at_median_orders_factors_like_first_order_sobol() {
         result.s[0],
         result.s[2]
     );
-    // X_3's first-order Sobol' is 0 (Ishigami canary). QOSA should
-    // be small, though not exactly 0 due to the X_1·X_3 interaction
-    // bleeding into the conditional CTE.
+    // This fixture has a small median QOSA estimate for X_3. A zero
+    // first-order Sobol' effect does not itself require zero QOSA.
     assert!(
         result.s[2] < 0.2,
         "S^α_3 = {:.3} should be small (X_3 first-order = 0 analytically)",
@@ -95,8 +84,8 @@ fn ishigami_qosa_global_diagnostics_are_finite_and_ordered() {
     let x = lhs_inputs(n, 3, -PI, PI);
     let y = ishigami_outputs(&x);
     let result = estimate_qosa(x.view(), &y, 0.9).expect("QOSA fit");
-    // CTE_α(Y) > F_Y^{-1}(α) by definition (CTE is the conditional
-    // mean of values exceeding the quantile).
+    // This sample has observations above the empirical quantile,
+    // so its empirical expected shortfall exceeds that quantile.
     assert!(
         result.global_cte > result.global_quantile,
         "CTE = {} should exceed quantile = {}",
@@ -154,8 +143,7 @@ fn tail_alpha_correctly_identifies_tail_driver_over_median_driver() {
         tail.s[2],
         tail.s[0]
     );
-    // The tail-driver ranking flips X_2 ahead of X_0 — that's the
-    // headline claim QOSA makes that variance-based Sobol' cannot.
+    // This fixture also increases the gate factor's estimate at alpha=0.95.
     assert!(
         tail.s[2] > median.s[2],
         "S_2 should be larger at α=0.95 ({:.3}) than at α=0.5 ({:.3})",

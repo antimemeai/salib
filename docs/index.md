@@ -1,13 +1,13 @@
 # salib
 
-Global sensitivity analysis for Rust, implemented from the primary literature.
-Bit-reproducible: same inputs and RNG state, same bits across thread counts on the same binary and platform.
+Use salib to estimate how uncertain inputs affect a model's output. Start with
+the tutorial, or choose a method based on the data and model runs you have.
 
-[crates.io](https://crates.io/crates/salib) · [API reference](https://docs.rs/salib) · [source](https://github.com/antimeme-ai/salib)
+[crates.io](https://crates.io/crates/salib) · [API reference](https://docs.rs/salib) · [source](https://github.com/antimemeai/salib)
 
 ---
 
-## Reading order
+## Getting started
 
 1. **[Quickstart](quickstart.md):** define inputs, generate a Saltelli design,
    map distributions, evaluate Ishigami, and interpret Sobol' indices and intervals.
@@ -34,34 +34,33 @@ API documentation for the three main building blocks:
 
 ### Variance-based (Sobol')
 
-Decompose output variance into contributions from each input.
-The workhorse of global SA.
+Estimate the share of output variance due to each input and its interactions.
 
-- [Saltelli 2010](methods/variance-based.md#saltelli-2010) — improved estimator for first-order and total-effect indices. The default choice.
-- [Jansen 1999](methods/variance-based.md#jansen-1999) — total-effect estimator with better convergence for small samples.
+- [Saltelli 2010](methods/variance-based.md#saltelli-2010) — first-order and total-effect indices from paired sampling matrices.
+- [Jansen 1999](methods/variance-based.md#jansen-1999) — squared-difference first-order estimates on a Saltelli design.
 - [Janon 2014](methods/variance-based.md#janon-2014) — asymptotically efficient first-order estimator.
 - [Owen 2013](methods/variance-based.md#owen-2013) — three-matrix design for small first-order indices.
 - [Given-data Sobol'](methods/variance-based.md#given-data-sobol) — Sobol' indices from observational data without designed experiments. Plischke et al. 2013.
 
 ### Elementary effects
 
-OAT trajectories through the input space. Screening: which factors matter, cheaply.
+Screen inputs by changing one factor at a time along sampled trajectories.
 
 - [Morris 1991](methods/elementary-effects.md#morris-1991) — mean and standard deviation of elementary effects. The original screening method.
 - [Grouped Morris](methods/elementary-effects.md#grouped-morris) — Morris with factor groups. Campolongo et al. 2007.
 
 ### Frequency-based
 
-Probe model response at characteristic frequencies per factor.
+Assign frequencies to inputs and estimate their contributions from the output spectrum.
 
 - [FAST / eFAST](methods/frequency.md#fast--efast) — Fourier Amplitude Sensitivity Test. First-order via spectral decomposition; extended variant adds total-effect. Cukier 1973, Saltelli 1999.
 - [RBD-FAST](methods/frequency.md#rbd-fast) — Random Balance Designs. Reuses a single random sample for all factors. Tarantola et al. 2006.
 
 ### Distribution-based
 
-Sensitivity beyond variance: shift in the entire output distribution.
+Measure changes in the output density, CDF, or a chosen quantile.
 
-- [Borgonovo δ](methods/distribution.md#borgonovo-delta) — moment-independent importance measure. Captures any distributional shift. Borgonovo 2007.
+- [Borgonovo δ](methods/distribution.md#borgonovo-delta) — moment-independent importance measure. Compares conditional and unconditional output densities. Borgonovo 2007.
 - [PAWN](methods/distribution.md#pawn) — CDF-based sensitivity via Kolmogorov–Smirnov statistic. Pianosi et al. 2015.
 - [QOSA](methods/distribution.md#qosa) — quantile-oriented sensitivity analysis. Fort et al. 2016.
 
@@ -75,15 +74,15 @@ Sensitivity beyond variance: shift in the entire output distribution.
 
 ### Surrogate
 
-Build a cheap approximation, extract indices analytically.
+Fit an approximation to the model and compute sensitivity indices from it.
 
 - [Polynomial Chaos Expansion](methods/surrogate.md#polynomial-chaos-expansion) — full OLS and sparse LARS/OMP. Analytic Sobol' indices from coefficients. Xiu & Karniadakis 2002, Blatman & Sudret 2011.
-- [HDMR](methods/surrogate.md#hdmr) — High-Dimensional Model Representation. Cut-HDMR with PCE component functions. Li et al. 2002.
+- [HDMR](methods/surrogate.md#hdmr) — High-Dimensional Model Representation. RS-HDMR using PCE coefficients grouped by interaction order. Li et al. 2001.
 - [Active Subspaces](methods/surrogate.md#active-subspaces) — gradient-based dimension reduction. Eigendecomposition of the uncentered gradient covariance. Constantine 2015.
 
 ### Game-theoretic
 
-- [Shapley Effects](methods/game-theoretic.md) — cost-sharing of output variance via coalitional game theory. Song, Nelson & Staum 2016.
+- [Shapley Effects](methods/game-theoretic.md) — allocate output variance, including interactions, among inputs. Song, Nelson & Staum 2016.
 
 ### Experimental design
 
@@ -96,4 +95,4 @@ Build a cheap approximation, extract indices analytically.
 
 - **[Bibliography](bibliography.md)** — primary references for the implemented methods.
 - **[Internals](internals.md)** — bit-reproducibility, tree-structured reductions, the rayon contract.
-- **[Crate map](crates.md)** — which crate owns what, dependency graph, feature flags.
+- **[Crate map](crates.md)** — crate APIs, dependencies, and feature flags.

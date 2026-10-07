@@ -23,9 +23,13 @@
 //! 3. Sh_i /= m for i = 1..k.
 //! ```
 //!
-//! `Σ Sh_i ≈ V̂ar[Y]` exactly when the per-permutation telescoping
-//! `Σ_j Δ̂_j = c(K) − c(∅) = V̂ar[Y] − 0` holds; sampling noise gives
-//! a finite-`m` deviation.
+//! Marginal contributions telescope to the same sampled total variance in each
+//! permutation. Their sum differs from `var_y` only through arithmetic rounding
+//! and the final clamp of tiny negative entries, not Monte Carlo noise.
+//!
+//! [Song, Nelson and Staum (2016), Algorithm 1 and Appendix B](https://users.iems.northwestern.edu/~nelsonb/Publications/SongNelsonStaum.pdf)
+//! describes the estimator. Theorem 3 assumes exact coalition costs, so its
+//! permutation-variance bound does not cover this nested Monte Carlo estimator.
 
 #![allow(
     clippy::cast_precision_loss,
@@ -41,15 +45,14 @@ use salib_core::{tree_sum, tree_var, Distribution, RngState};
 
 /// Shapley-effects estimate for a model on independent inputs.
 ///
-/// `#[non_exhaustive]` — future fields (per-permutation trace,
-/// bootstrap CIs, dependent-input metadata) land non-breaking.
+/// Contributions are unnormalized: divide by `var_y` for variance shares.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct ShapleyIndices {
-    /// `Sh_i` per factor, length `k`. Sums to `var_y` (modulo MC
-    /// noise). Each `Sh_i ≥ 0` in expectation; Song 2016 Theorem 3
-    /// bounds the variance.
+    /// `Sh_i` per factor, length `k`, in output-variance units.
+    /// Sums to `var_y` up to rounding and tiny-negative clamping.
+    /// Individual entries have sampling error and may be negative.
     pub sh: Vec<f64>,
     /// Total variance of `Y` estimated from the var-only block.
     pub var_y: f64,
@@ -115,9 +118,9 @@ pub enum ShapleyError {
 /// sampling count `m`; `n_outer` is `N_O`; `n_inner` is `N_I`.
 /// `n_var` is `N_V` for the variance-only block.
 ///
-/// Recommended budget per Song 2016 Appendix B: `n_inner = 3,
-/// n_outer = 1`, `n_perm` consuming the remaining computational
-/// budget, `n_var ≥ 1000` for a stable variance estimate.
+/// For randomly sampled permutations, Song 2016 Appendix B recommends
+/// `n_inner = 3`, `n_outer = 1`, and spending the remaining budget on
+/// `n_perm`. Choose `n_var` separately by checking variance-estimate stability.
 ///
 /// # Errors
 ///

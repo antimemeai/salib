@@ -1,12 +1,11 @@
 # salib-core
 
-Foundational input definitions, validated numeric values, RNG state, and
-bit-reproducible reductions for global sensitivity analysis. Depend on this
-crate directly when defining experiments, writing a custom sampler/estimator,
-or replaying random streams without the analysis suite. For a complete analysis,
-use the `salib` facade, or add `salib-samplers` and `salib-estimators`.
+Input definitions, checked numeric types, random streams, and reproducible
+sums and variances. Use this crate to define an experiment or write a sampler
+or estimator. For sampling and analysis, add `salib-samplers` and
+`salib-estimators`, or use the combined `salib` crate.
 
-## Key APIs
+## API
 
 | API | Purpose |
 |---|---|
@@ -44,15 +43,14 @@ does not advance its parent and resets its child's position to zero.
 
 ```toml
 [dependencies]
-salib-core = "0.2"
+salib-core = "0.3"
 ```
 
 `parallel` is enabled by default. Use `default-features = false` for the serial
-fallback, subject to Cargo feature unification. Core types support serde without
-an opt-in feature. Bit-reproducibility applies to the same binary and platform;
-it does not imply cross-platform identical math or statistical accuracy.
+fallback, subject to Cargo feature unification. Core types support serde by default. Reproducing the same result bits requires
+the same binary and platform. Check statistical accuracy separately.
 
 [API reference](https://docs.rs/salib-core/latest/salib_core/) ·
-[Documentation](https://github.com/antimeme-ai/salib/blob/main/docs/index.md)
+[Documentation](https://github.com/antimemeai/salib/blob/master/docs/index.md)
 
 MIT OR Apache-2.0.

@@ -1,63 +1,27 @@
-//! FAST search-curve sampler — Saltelli-Tarantola-Chan 1999 (a.k.a.
-//! eFAST in the literature). Surfaces under the API name `fast` for
-//! `SALib`-affinity per
+//! FAST search curves for first-order and total-effect estimation.
 //!
-//!
-//! # The design
-//!
-//! For each factor-of-interest `i ∈ 0..d`, factor `i` gets the
-//! maximum frequency `ω_max`; the remaining `d − 1` factors get
-//! complementary frequencies bounded above by `ω_max / (2·M)` (so
-//! their spectra do not overlap `ω_max`'s harmonic band up to order
-//! `M`). The sampler emits `n_per_factor` points along each search
-//! curve, stacked as an `(n_per_factor · d, d)` matrix.
-//!
-//! Search curve transformation (uniform marginal on `[0, 1]`):
+//! Based on [Saltelli, Tarantola and Chan (1999)](https://doi.org/10.1080/00401706.1999.10485594),
+//! Sections 2.2 and 4.2. One curve is built per input, with that input assigned
+//! a high frequency and the others assigned lower frequencies.
+//! Each curve has `N` points, so a `d`-input design has `N*d` rows.
 //!
 //! ```text
-//! x[i·N + n, j] = 1/2 + (1/π) · arcsin(sin(ω[i, j] · s_n + φ[i, j]))
-//! s_n           = (2π / N) · n,           n ∈ 0..N
+//! x[i*N+n,j] = 1/2 + asin(sin(omega[i,j]*s_n + phase[i,j]))/pi
+//! s_n = 2*pi*n/N
+//! omega_max = floor((N-1)/(2*M))
+//! m = floor(omega_max/(2*M))
 //! ```
 //!
-//! `ω[i, j]` is `ω_max` when `j == i` and one of the `d − 1`
-//! complementary frequencies otherwise. `φ[i, j] ~ Uniform[0, 2π]`
-//! drawn deterministically from the input `RngState`.
+//! The remaining frequencies are rounded, evenly spaced values from `1` to
+//! `m`, or cycle through `1..=m` if fewer distinct frequencies are available.
+//! Repeated frequencies can reduce coverage of the complementary input space.
+//! The low-frequency assignment does not eliminate all interaction aliasing.
+//! This sampler draws a separate phase for each factor on each curve.
 //!
-//! # Frequency selection (Saltelli 1999 § 3.2)
-//!
-//! ```text
-//! ω_max = floor((N − 1) / (2 · M))
-//! m     = floor(ω_max / (2 · M))
-//!
-//! if m ≥ d − 1:
-//!     complementary[k] = round(linspace(1, m, d − 1)[k])
-//! else:
-//!     complementary[k] = (k mod m) + 1                         # `SALib` parity
-//! ```
-//!
-//! # Bit-reproducibility
-//!
-//! Pure under `(d, n_per_factor, harmonic, RngState)`. Same
-//! `RngState` in → bit-identical `FastDesign` out, with
-//! `RngState::word_pos` advanced to reflect consumed bytes.
-//!
-//! # Cost
-//!
-//! `n_per_factor · d` model evaluations. With `SALib` defaults
-//! (`M = 4`, `N = 65`, `ω_max = 8`), 65 · `d` evals — comparable to
-//! Morris but with frequency-domain `Sᵀᵢ` recovery rather than
-//! finite-difference.
-//!
-//! # What this module does NOT ship
-//!
-//! - **Spectral estimator** returning `Sᵢ` and `Sᵀᵢ` — PR 9b.
-//! - **Classical Cukier 1973 FAST** (different `G_i` transformation).
-//!   Bead-eligible if a historical-reproducibility use case lands.
-//! - **RBD-FAST** (Tarantola 2006, Plischke 2010) — different
-//!   algorithm operating on given data; PR 10.
-//! - **`Sampler` trait `impl`.** FAST output is intrinsically
-//!   blocked with load-bearing frequency / phase metadata; exposed
-//!   as a free function returning `FastDesign`.
+//! Samples are in `[0,1]`; transform them to the intended independent input
+//! distributions before evaluating the model. `N >= 4*M*M+1` keeps the
+//! complementary frequency budget positive; it is not an accuracy guarantee.
+//! The estimator supports both odd and even sample counts.
 
 use std::f64::consts::PI;
 
@@ -68,10 +32,6 @@ use salib_core::RngState;
 pub use crate::harmonic_budget::{HarmonicBudget, HarmonicError};
 
 /// Output of [`build_fast_design`].
-///
-/// `#[non_exhaustive]` — future fields (`recorded_rng_state` for
-/// audit replay, `kind: FastKind` if classical Cukier lands,
-/// `random_phase: bool` config echo) land non-breaking.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
@@ -259,16 +219,14 @@ pub fn build_fast_design_with_budget(
     })
 }
 
-/// Saltelli 1999 § 3.2 complementary frequency selection.
+/// Complementary frequency selection following Saltelli 1999 § 4.2.
 /// Returns `d − 1` frequencies, all `≤ ω_max / (2·M)`.
 ///
 /// When `m = floor(ω_max / (2·M)) ≥ d − 1`, frequencies are
 /// `linspace(1, m, d-1)` (rounded to integers); pairwise distinct.
 ///
 /// When `m < d − 1`, frequencies cycle `1..=m`; collisions occur.
-/// This matches `SALib`'s `fast_sampler.py` behavior. The estimator
-/// (PR 9b) tolerates collisions because the FFT bins are still
-/// well-separated.
+/// Reusing frequencies can reduce coverage of the complementary space.
 fn complementary_frequencies(d: usize, omega_max: u32, harmonic: u32) -> Vec<u32> {
     if d <= 1 {
         return Vec::new();

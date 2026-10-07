@@ -31,6 +31,7 @@ use salib_estimators::{
 
 /// Deserialize from a JSON string, serialize back to JSON, deserialize again,
 /// and assert the two Debug representations match.
+#[allow(clippy::expect_used)] // Invalid serialized fixtures should fail the test.
 fn roundtrip_json<T>(json: &str)
 where
     T: serde::Serialize + serde::de::DeserializeOwned + std::fmt::Debug,
@@ -42,6 +43,7 @@ where
 }
 
 /// For types that implement PartialEq, assert value equality rather than Debug equality.
+#[allow(clippy::expect_used)] // Invalid serialized fixtures should fail the test.
 fn roundtrip_eq<T>(json: &str)
 where
     T: serde::Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
@@ -219,7 +221,8 @@ fn qosa_indices_roundtrip() {
             "s": [0.55, 0.30, 0.05],
             "alpha": 0.95,
             "global_quantile": 12.3,
-            "global_cte": 15.8
+            "global_cte": 15.8,
+            "global_loss": 0.175
         }"#,
     );
 }

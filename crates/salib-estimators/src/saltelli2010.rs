@@ -1,40 +1,25 @@
-//! Saltelli's 2010 first-order + total-order Sobol' index estimator.
+//! First-order and total-effect Sobol' indices on a Saltelli design.
 //!
-//! Per Saltelli et al. (2010), "Variance based sensitivity analysis
-//! of model output. Design and estimator for the total sensitivity
-//! index." The first-order index uses Eq c (Saltelli's preferred
-//! form for moderate-N regimes); the total-order index uses
-//! Jansen 1999's form (Eq f), which Saltelli 2010 § 4 recommends
-//! as the universal best.
-//!
-//! # Formulas
-//!
-//! Given a `SaltelliMatrix` `(A, B, A_Bⁱ)` (radial design) and
-//! a model `f`:
+//! [Saltelli et al. (2010)](https://doi.org/10.1016/j.cpc.2009.09.018),
+//! Table 2(b) and 2(f), give the first-order formula and Jansen's
+//! squared-difference total-effect formula used here.
+//! `A_Bⁱ` replaces column `i` of `A` with column `i` of `B`.
 //!
 //! ```text
-//! fa[j]      = f(A.row(j))                 // n evals
-//! fb[j]      = f(B.row(j))                 // n evals
-//! fab[i][j]  = f(A_Bⁱ.row(j))              // n × d evals
-//! Total = N(d+2) model evaluations.
-//!
-//! f_0  = (1/N) Σⱼ fa[j]
-//! D    = Var(Y) = (1/N) Σⱼ (fa[j] - f_0)²  // population variance
-//!
-//! S_i   = (1/N) Σⱼ fb[j] · (fab[i][j] - fa[j]) / D     (Saltelli 2010 Eq c)
-//! S_T_i = (1/(2N)) Σⱼ (fa[j] - fab[i][j])² / D         (Jansen 1999, Eq f)
+//! fa[j]     = f(A.row(j))
+//! fb[j]     = f(B.row(j))
+//! fab[i][j] = f(A_Bⁱ.row(j))
+//! D         = mean((fa - mean(fa))^2)
+//! S_i       = mean(fb * (fab[i] - fa)) / D
+//! S_T_i     = mean((fa - fab[i])^2) / (2D)
 //! ```
 //!
-//! # Bit-reproducibility
-//!
-//! Pure function of `(matrix, model)`. All sums route through
-//! `salib_core::reduce::tree_sum` / `tree_dot` / `tree_var` —
-//! no `f64`-associativity drift under rayon partitioning (per
-//! ).
-//!
-//! Model evaluations are CPU-bound and synchronous; there's no RNG
-//! draw inside the estimator — the `RngState` parameter belongs to
-//! the bootstrap wrapper, not the point estimator.
+//! The basic design costs `N(d+2)` model calls. Optional second-order
+//! blocks raise this to `N(2d+2)`. Inputs must be independent for the
+//! usual variance decomposition, and output variance must be finite
+//! and positive. Finite-sample estimates can lie outside `[0,1]`.
+//! The estimator evaluates the model synchronously and draws no random
+//! numbers. Bootstrap uncertainty estimates have a separate API.
 
 // SA notation per Saltelli 2010: `fa`/`fab`, `s_i`/`s_t_i`. Naming
 // purity fights the paper cross-reference. `cast_precision_loss`:
@@ -58,8 +43,8 @@ use crate::sobol_indices::SobolIndices;
 ///
 /// Nonfinite variance or numerators yield zero indices; nonfinite total variance is reported as zero.
 ///
-/// `model` is called `n × (d + 2)` times. For a typical SA campaign
-/// with N=8192 and d=3, that's 40,960 evaluations.
+/// Calls `model` `n × (d + 2)` times, or `n × (2d + 2)` when the
+/// design includes second-order blocks.
 ///
 /// # Panics
 ///
@@ -118,7 +103,7 @@ where
     let mut total_order = Vec::with_capacity(d);
 
     for fab_i in &fab {
-        // Saltelli 2010 Eq c:
+        // Saltelli 2010 Table 2(b):
         //   S_i = (1/N) Σⱼ fb[j] · (fab[i][j] - fa[j]) / D
         let diff: Vec<f64> = fab_i.iter().zip(fa.iter()).map(|(ab, a)| ab - a).collect();
         let s_i_num = tree_dot(&fb, &diff) / n_f;
@@ -130,7 +115,7 @@ where
             },
         );
 
-        // Jansen 1999 (Saltelli 2010 Eq f):
+        // Jansen 1999 (Saltelli 2010 Table 2(f)):
         //   S_T_i = (1/(2N)) Σⱼ (fa[j] - fab[i][j])² / D
         let sq_diff: Vec<f64> = fa
             .iter()
@@ -147,7 +132,7 @@ where
         );
     }
 
-    // ── Second-order indices (Saltelli 2010 Eq d) ────────────────
+    // Pairwise indices from complementary hybrids.
     //
     // When the caller supplies B_Aⁱ matrices (the symmetric
     // counterpart of A_Bⁱ), we compute S2_{ij} for every i < j:
@@ -196,7 +181,7 @@ where
 
 /// Estimate first-order and total-order Sobol' indices from
 /// pre-computed model outputs. Same formulas as
-/// [`estimate_saltelli2010`] (Saltelli 2010 Eq c + Jansen 1999 Eq f),
+/// [`estimate_saltelli2010`] (Saltelli 2010 Table 2(b) and 2(f)),
 /// but takes cached `fa`, `fb`, `fab` arrays directly instead of a
 /// model function.
 ///
@@ -288,7 +273,7 @@ pub fn estimate_saltelli2010_from_outputs(
 /// from pre-computed model outputs including B_A evaluations.
 ///
 /// Same formulas as [`estimate_saltelli2010_from_outputs`] for S1 and ST,
-/// plus Saltelli 2010 Eq d for S2_{ij}:
+/// plus the complementary-hybrid cross-product formula for S2_{ij}:
 ///
 /// ```text
 /// V_{ij}  = (1/N) sum_k [ fba[j][k] * fab[i][k] - fa[k] * fb[k] ]
@@ -352,7 +337,7 @@ pub fn estimate_saltelli2010_from_outputs_with_second_order(
         total_order.push(s_t_i);
     }
 
-    // Second-order indices (Saltelli 2010 Eq d)
+    // Pairwise indices from complementary hybrids.
     let fa_fb: Vec<f64> = fa.iter().zip(fb.iter()).map(|(a, b)| a * b).collect();
 
     let mut s2: Vec<Vec<f64>> = Vec::with_capacity(d);

@@ -1,23 +1,32 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Publish all workspace crates to crates.io in dependency order.
-# Requires: cargo install cargo-workspaces
-#
-# Usage:
-#   ./scripts/publish.sh           # bump patch, publish all
-#   ./scripts/publish.sh minor     # bump minor, publish all
-#   ./scripts/publish.sh --dry-run # show what would happen
+# Package and verify this workspace's existing release versions using Cargo.
+# No version bump or cargo-workspaces dependency. Multi-package publishing
+# requires multi-package publishing support (verified with Cargo 1.95);
+# consumers retain the documented feature-specific Rust requirements.
+# Usage: ./scripts/publish.sh [--dry-run|--publish]
+# Default: dry run. --publish uploads and requires a clean Git working tree.
 
-BUMP="${1:-patch}"
-
-if [[ "$BUMP" == "--dry-run" ]]; then
-    echo "Publish order:"
-    cargo ws plan
-    echo ""
-    echo "Current versions:"
-    cargo ws list
-    exit 0
+cd "$(dirname "$0")/.."
+mode="${1:---dry-run}"
+if [[ $# -gt 1 ]]; then
+    echo "Usage: $0 [--dry-run|--publish]" >&2
+    exit 2
 fi
-
-cargo ws publish --from-git --yes "$BUMP"
+case "$mode" in
+    --dry-run)
+        cargo publish --dry-run --workspace --exclude salib-models --locked --allow-dirty --features salib/full,salib/serde
+        ;;
+    --publish)
+        if [[ -n "$(git status --porcelain)" ]]; then
+            echo "Commit the reviewed release changes before publishing." >&2
+            exit 1
+        fi
+        cargo publish --workspace --exclude salib-models --locked --features salib/full,salib/serde
+        ;;
+    *)
+        echo "Usage: $0 [--dry-run|--publish]" >&2
+        exit 2
+        ;;
+esac

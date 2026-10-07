@@ -1,38 +1,10 @@
-//! End-to-end reviewer-affordance contract close for the FAST/
-//! eFAST estimator against the Ishigami test function.
+//! FAST/eFAST checks on Ishigami with fixed seeds and harmonic order.
 //!
-//!  Third PR
-//! exercising the contract pattern (after PR 7's Saltelli2010 +
-//! PR 8's Morris).
+//! Analytic indices provide the population targets. Error tolerances and
+//! comparisons across sample counts apply to these configurations; they do
+//! not establish a convergence rate or a permanent bias for the method.
 //!
-//! Contract artifacts:
-//!
-//! 1. **Canonical analytic test function** — Ishigami at `(a=7, b=0.1)`,
-//!    closed-form `S, ST` per Saltelli Primer 2008.
-//! 2. **Model-free identity test** — `ST_i ≥ S_i` for every factor
-//!    (universal Sobol' identity).
-//! 3. **Frozen `SALib` differential** — agreement with `SALib`'s
-//!    `analyze.fast` at `N ∈ {65, 257, 1025}`.
-//! 4. **Convergence-rate test** — `|S_i - S_i_analytic|` and
-//!    `|ST_i - ST_i_analytic|` shrink (or hold within FAST's bias
-//!    floor) as `N` increases from 65 to 1025.
-//! 5. **cargo-mutants kill rate**
-//!
-//! # FAST's known systematic bias on Ishigami
-//!
-//! eFAST exhibits a well-documented bias on interaction-heavy
-//! functions like Ishigami. The `sin(x_1) · x_3⁴` term creates
-//! spectral content at sums and differences of `ω_1` and `ω_3`
-//! that alias into the harmonic bands of both factors. The result:
-//!
-//! - `S_3` shows a small false signal (~0.02 vs analytic 0.0).
-//! - `ST_1` underestimates by ~0.04 (vs analytic 0.558).
-//! - `ST_2` overestimates by ~0.05.
-//!
-//! These persist as `N` increases; they're *bias*, not MC noise.
-//! `SALib` shows the same bias on the same function. Tolerances
-//! account for it explicitly in artifact 1; artifact 3 is tighter
-//! because both implementations share the bias.
+//! Discrete Fourier fixtures in the unit tests separately check spectral arithmetic.
 
 #![allow(
     clippy::float_cmp,
@@ -72,14 +44,12 @@ fn run_fast_at_n(n: usize) -> FastIndices {
     estimate_fast(&design, ishigami_on_unit_cube).expect("estimate")
 }
 
-// ── Artifact 1: canonical analytic recovery ─────────────────────────
+// Analytic targets.
 
 #[test]
-fn fast_ishigami_recovers_analytic_within_bias_bound() {
-    // Realized errors at FIXTURE_SEED, N=1025:
-    //   max |S - analytic|  = 0.020 (factor 3 false signal)
-    //   max |ST - analytic| = 0.046 (factor 2 overestimate)
-    // FAST's bias persists past N=1025; tolerances reflect it.
+fn fast_ishigami_recovers_analytic_on_selected_design() {
+    // Check all indices against the analytic targets at this seed and N=1025.
+    // The tolerances cover this fixture; they are not general error bounds.
     let estimate = run_fast_at_n(1025);
     let analytic = ishigami::analytic_indices(7.0, 0.1);
     const S_TOL: f64 = 0.05;
@@ -102,13 +72,12 @@ fn fast_ishigami_recovers_analytic_within_bias_bound() {
     }
 }
 
-// ── Artifact 2: model-free identity test ────────────────────────────
+// Index ordering and ranges on the selected fixture.
 
 #[test]
 fn fast_ishigami_total_at_least_first_order() {
-    // Universal Sobol' identity: ST_i ≥ S_i for every factor.
-    // The estimator clamps to [0, 1] but does not enforce ST ≥ S
-    // by construction; this test pins the math, not the clamp.
+    // Population Sobol' indices satisfy ST_i >= S_i for independent inputs.
+    // Check whether this finite-sample estimate also respects that ordering.
     let estimate = run_fast_at_n(1025);
     for i in 0..3 {
         assert!(
@@ -120,86 +89,13 @@ fn fast_ishigami_total_at_least_first_order() {
     }
 }
 
-// ── Artifact 3: SALib differential ──────────────────────────────────
+// Errors at selected sample counts.
 
 #[test]
-fn fast_ishigami_matches_salib_within_mc_noise_at_n_1025() {
-    // Frozen reference from `SALib.analyze.fast` on Ishigami at
-    // `(a=7, b=0.1)`, `N=1025`, `M=4`, `numpy.random.seed(42)`:
-    //   S  = [0.3120, 0.4441, 0.0198]
-    //   ST = [0.5389, 0.4893, 0.2407]
-    //
-    // Different RNG seeds → different phase realizations, but
-    // both implementations share FAST's systematic bias. Their
-    // difference is bounded by phase-MC noise; observed ≤ 0.016
-    // at N=1025. Tolerance 0.05 (3× headroom).
-    let estimate = run_fast_at_n(1025);
-    let salib_s = [0.3120, 0.4441, 0.0198];
-    let salib_st = [0.5389, 0.4893, 0.2407];
-    const TOL: f64 = 0.05;
-    for i in 0..3 {
-        let ds = (estimate.s[i] - salib_s[i]).abs();
-        let dst = (estimate.st[i] - salib_st[i]).abs();
-        assert!(
-            ds < TOL,
-            "S_{i}: ours {:.4}, SALib {:.4}, diff {ds:.4}",
-            estimate.s[i],
-            salib_s[i]
-        );
-        assert!(
-            dst < TOL,
-            "ST_{i}: ours {:.4}, SALib {:.4}, diff {dst:.4}",
-            estimate.st[i],
-            salib_st[i]
-        );
-    }
-}
-
-#[test]
-fn fast_ishigami_matches_salib_at_low_n() {
-    // SALib reference at N=257 (smaller-N regime where MC noise
-    // is more visible):
-    //   S  = [0.3124, 0.4441, 0.0269]
-    //   ST = [0.5362, 0.4895, 0.2434]
-    let estimate = run_fast_at_n(257);
-    let salib_s = [0.3124, 0.4441, 0.0269];
-    let salib_st = [0.5362, 0.4895, 0.2434];
-    const TOL: f64 = 0.05;
-    for i in 0..3 {
-        let ds = (estimate.s[i] - salib_s[i]).abs();
-        let dst = (estimate.st[i] - salib_st[i]).abs();
-        assert!(
-            ds < TOL,
-            "S_{i}: ours {} SALib {} diff {ds:.4}",
-            estimate.s[i],
-            salib_s[i]
-        );
-        assert!(
-            dst < TOL,
-            "ST_{i}: ours {} SALib {} diff {dst:.4}",
-            estimate.st[i],
-            salib_st[i]
-        );
-    }
-}
-
-// ── Artifact 4: convergence-rate ────────────────────────────────────
-
-#[test]
-fn fast_ishigami_converges_with_n() {
-    // FAST has a *bias floor* (the systematic interaction-aliasing
-    // bias), so error doesn't vanish — but it does *decay* from
-    // small N to large N as MC noise around the bias floor shrinks.
-    //
-    // Realized at FIXTURE_SEED:
-    //   N=65   S_2 err = 0.005  ST_1 err = 0.044
-    //   N=257  S_2 err = 0.001  ST_1 err = 0.034
-    //   N=1025 S_2 err = 0.001  ST_1 err = 0.034 (bias floor)
-    //
-    // We assert: error at N=257 is ≤ error at N=65, and error at
-    // N=1025 is ≤ error at N=257 (allowing equality at the bias
-    // floor). Pinned for factor 2's S (where convergence is most
-    // visible) and factor 1's ST (where bias dominates).
+fn fast_ishigami_errors_at_selected_sample_counts() {
+    // Compare selected errors at N=65, 257 and 1025 for this fixed seed.
+    // Monotone error reduction is not guaranteed for arbitrary designs,
+    // and three sample counts do not establish an asymptotic rate or bias.
     let analytic = ishigami::analytic_indices(7.0, 0.1);
     let est_low = run_fast_at_n(65);
     let est_mid = run_fast_at_n(257);
@@ -232,7 +128,7 @@ fn fast_ishigami_converges_with_n() {
     );
 }
 
-// ── Bonus: factor ranking by S_T is exactly correct ─────────────────
+// Factor ranking on the selected fixture.
 
 #[test]
 fn fast_ishigami_ranks_factors_by_total_order_correctly() {

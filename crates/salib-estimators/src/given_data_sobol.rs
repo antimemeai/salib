@@ -1,54 +1,27 @@
-//! Given-data first-order Sobol' indices via the Plischke-
-//! Borgonovo-Smith 2013 partition-based estimator.
+//! Approximate first-order Sobol' indices from paired input/output data.
 //!
-//! Sibling
-//! to `borgonovo` (same paper, same partitioning machinery, but
-//! variance-based instead of PDF-divergence-based).
-//!
-//! # Algorithm — Plischke-Borgonovo-Smith 2013 + law of total variance
+//! The partition approach is described by
+//! [Plischke, Borgonovo and Smith (2013)](https://doi.org/10.1016/j.ejor.2012.11.047).
+//! For each input, sort observations by value and split them into
+//! nearly equal-size classes without separating tied values. Compute
 //!
 //! ```text
-//! Var(Y) = E[Var(Y|X_i)] + Var(E[Y|X_i])
-//! S_1_i  = Var(E[Y|X_i]) / Var(Y)
-//!        = 1 − E[Var(Y|X_i)] / Var(Y)              (the form we compute)
+//! S_i = 1 - sum_m (n_m/N) Var_Nm(Y in class m) / Var_N(Y).
 //! ```
 //!
-//! For each factor `i`:
+//! Variances use the population divisor. This is the empirical
+//! between-class variance divided by total variance, clamped to `[0,1]`
+//! for rounding error. It has no bias correction.
 //!
-//! 1. Partition `X[:, i]` into `M` equal-frequency classes by
-//!    ordinal rank (same partition as `borgonovo::class_count`,
-//!    matches `SALib`).
-//! 2. For each class `j`: compute `Var(Y | X_i ∈ class_j)` (population
-//!    variance, 1/n divisor).
-//! 3. `E[Var(Y|X_i)] = Σ_j (|class_j| / N) · Var_j`.
-//! 4. `S_1_i = 1 − E[Var(Y|X_i)] / Var(Y)`, clamped to `[0, 1]`.
+//! Classes approximate conditioning on an input value. Their count is
+//! automatic and capped at 48, so increasing `N` cannot generally remove
+//! the remaining binning error. Ties are assigned by their sorted rank
+//! block midpoint; empty classes are omitted. A constant input gives
+//! one class and zero index.
+//! With dependent inputs, the measure includes input association.
 //!
-//! Computing via `1 − E[Var(Y|X)]/Var(Y)` avoids materializing
-//! conditional means and matches `SALib`'s `delta.analyze`'s `S1`
-//! output exactly.
-//!
-//! # Differences from RBD-FAST
-//!
-//! Both produce first-order `S_1` from given `(X, Y)`. RBD-FAST
-//! uses *spectral* analysis on rank-permuted output (FFT, Plischke
-//! 2010 bias correction). This estimator uses *direct* variance
-//! decomposition by partition. Pros and cons:
-//!
-//! | | RBD-FAST | Given-data Sobol' |
-//! |---|---|---|
-//! | Mechanism | Spectral (FFT) | Variance partition |
-//! | Bias correction | Plischke 2010 (`λ = 2M/N`) | None — Eq 7 is unbiased asymptotically |
-//! | Tunable | Harmonic order `M` | Class count `M` (auto from `N`) |
-//! | Cost | `O(N log N · d)` | `O(N · d)` |
-//!
-//! Both are sampler-agnostic. Differ in numerical behavior at
-//! finite `N`; converge to the same true `S_1` as `N → ∞`.
-//!
-//! # Bit-reproducibility
-//!
-//! Pure under `(X, Y)`. Stable sort + ordinal ranking → deterministic
-//! class membership. All sums route through `tree_sum`. Same `(X, Y)`
-//! in → bit-identical `S1` out.
+//! Sorting and class accumulation cost `O(d N log N)`, with `M <= 48`.
+//! No additional model evaluations or paired sampling design are needed.
 
 #![allow(
     clippy::similar_names,
@@ -59,27 +32,22 @@
     clippy::needless_range_loop
 )]
 
-use std::cmp::Ordering;
 use std::fmt;
 
+use crate::borgonovo::class_count;
+use crate::conditioning::classes;
 #[cfg(test)]
 use ndarray::Array2;
 use ndarray::ArrayView2;
 use salib_core::tree_sum;
 
 /// First-order Sobol' index estimates from given-data partition.
-///
-/// `#[non_exhaustive]` — future fields (`bootstrap_ci`, total-order
-/// extension if a literature-vetted variant lands) land non-breaking.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct GivenDataSobolIndices {
-    /// First-order Sobol' index per factor, length `d`. Clamped to
-    /// `[0, 1]` (the law of total variance guarantees the
-    /// population value is non-negative; finite-sample noise can
-    /// push the raw computation slightly outside that range, hence
-    /// the clamp).
+    /// Approximate first-order index per factor, length `d`.
+    /// Clamped to `[0, 1]` for floating-point rounding error.
     pub s1: Vec<f64>,
 }
 
@@ -108,6 +76,20 @@ impl fmt::Display for GivenDataSobolIndices {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum GivenDataSobolError {
+    /// An input observation is NaN or infinite.
+    #[error("input at row {row}, column {column} must be finite")]
+    NonfiniteInput {
+        /// Zero-based input row.
+        row: usize,
+        /// Zero-based input column.
+        column: usize,
+    },
+    /// An output observation is NaN or infinite.
+    #[error("output at index {index} must be finite")]
+    NonfiniteOutput {
+        /// Zero-based output index.
+        index: usize,
+    },
     /// Input and output shapes are incompatible.
     #[error("given-data Sobol': shape mismatch — X has {x_rows} rows, y has {y_len} elements")]
     ShapeMismatch {
@@ -119,9 +101,7 @@ pub enum GivenDataSobolError {
     /// At least one input dimension is required.
     #[error("given-data Sobol': d must be ≥ 1, got 0")]
     ZeroD,
-    /// `N < 16` — too few samples for meaningful partitioning.
-    /// Floor matches `borgonovo` for consistency across the
-    /// partition-based given-data estimator family.
+    /// `N < 16`, below this implementation's minimum sample count.
     #[error("given-data Sobol': N must be ≥ 16, got {n}")]
     InsufficientSamples {
         /// Sample count supplied by the caller.
@@ -136,10 +116,13 @@ pub enum GivenDataSobolError {
 /// via the Plischke-Borgonovo-Smith 2013 partition estimator.
 ///
 /// `x` is the `(N, d)` input matrix; `y` is the `N`-element model
-/// output. Sampler-agnostic — LHS, Sobol', Saltelli matrix, user
-/// data all work.
+/// output. Rows must be aligned and represent the input distribution
+/// of interest. The estimator does not require a paired design.
 ///
 /// # Errors
+///
+/// - [`GivenDataSobolError::NonfiniteInput`] for any NaN or infinite input.
+/// - [`GivenDataSobolError::NonfiniteOutput`] for any NaN or infinite output.
 ///
 /// - [`GivenDataSobolError::ShapeMismatch`] if `x.nrows() != y.len()`.
 /// - [`GivenDataSobolError::ZeroD`] if `x.ncols() == 0`.
@@ -164,6 +147,13 @@ pub fn estimate_given_data_sobol(
         return Err(GivenDataSobolError::InsufficientSamples { n });
     }
 
+    if let Some(((row, column), _)) = x.indexed_iter().find(|(_, v)| !v.is_finite()) {
+        return Err(GivenDataSobolError::NonfiniteInput { row, column });
+    }
+    if let Some(index) = y.iter().position(|v| !v.is_finite()) {
+        return Err(GivenDataSobolError::NonfiniteOutput { index });
+    }
+
     let var_y = population_variance(y);
     if !var_y.is_finite() || var_y < 1e-15 {
         return Err(GivenDataSobolError::ZeroVariance);
@@ -175,31 +165,18 @@ pub fn estimate_given_data_sobol(
 
     let mut x_col_buf = vec![0.0_f64; n];
     let mut class_y_buf: Vec<f64> = Vec::with_capacity(n);
-    let mut weighted_intra = vec![0.0_f64; n_classes];
 
     for i in 0..d {
         for k in 0..n {
             x_col_buf[k] = x[[k, i]];
         }
-        let ranks = ordinal_ranks(&x_col_buf);
-
-        for j in 0..n_classes {
-            let lo = (n_f * (j as f64) / (n_classes as f64)) as usize;
-            let hi = (n_f * ((j + 1) as f64) / (n_classes as f64)) as usize;
+        let groups = classes(&x_col_buf, n_classes);
+        let mut weighted_intra = Vec::with_capacity(groups.len());
+        for group in groups {
             class_y_buf.clear();
-            for (k, &r) in ranks.iter().enumerate() {
-                if r > lo && r <= hi {
-                    class_y_buf.push(y[k]);
-                }
-            }
-            let nm = class_y_buf.len();
-            if nm > 0 {
-                let weight = (nm as f64) / n_f;
-                let var_class = population_variance(&class_y_buf);
-                weighted_intra[j] = weight * var_class;
-            } else {
-                weighted_intra[j] = 0.0;
-            }
+            class_y_buf.extend(group.iter().map(|&k| y[k]));
+            let weight = class_y_buf.len() as f64 / n_f;
+            weighted_intra.push(weight * population_variance(&class_y_buf));
         }
         let e_var_given_x = tree_sum(&weighted_intra);
         // Law of total variance: S_1 = 1 - E[Var(Y|X_i)] / Var(Y).
@@ -210,17 +187,6 @@ pub fn estimate_given_data_sobol(
     Ok(GivenDataSobolIndices { s1 })
 }
 
-/// Equal-frequency partition count, matching `SALib` /
-/// `borgonovo::class_count`.
-fn class_count(n: usize) -> usize {
-    let n_f = n as f64;
-    let tanh_arg = (1500.0 - n_f) / 500.0;
-    let exp = 2.0 / (7.0 + tanh_arg.tanh());
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let raw = n_f.powf(exp).ceil() as usize;
-    raw.clamp(2, 48)
-}
-
 /// Population variance (1/n divisor; not Bessel) — matches the
 /// scaling used by `SALib`'s `delta.sobol_first`.
 fn population_variance(v: &[f64]) -> f64 {
@@ -228,17 +194,6 @@ fn population_variance(v: &[f64]) -> f64 {
     let mean = tree_sum(v) / n;
     let sq_sum: f64 = v.iter().map(|x| (x - mean).powi(2)).sum();
     sq_sum / n
-}
-
-/// Ordinal ranks `1..=N`, stable tie-break by input order.
-fn ordinal_ranks(data: &[f64]) -> Vec<usize> {
-    let mut idx: Vec<usize> = (0..data.len()).collect();
-    idx.sort_by(|&a, &b| data[a].partial_cmp(&data[b]).unwrap_or(Ordering::Equal));
-    let mut ranks = vec![0_usize; data.len()];
-    for (rank, &i) in idx.iter().enumerate() {
-        ranks[i] = rank + 1;
-    }
-    ranks
 }
 
 #[cfg(test)]
@@ -413,11 +368,5 @@ mod tests {
         let v = vec![1.0, 2.0, 3.0];
         let expected = 2.0 / 3.0;
         assert!((population_variance(&v) - expected).abs() < 1e-12);
-    }
-
-    #[test]
-    fn ordinal_ranks_one_indexed() {
-        let data = [3.0, 1.0, 2.0];
-        assert_eq!(ordinal_ranks(&data), vec![3, 1, 2]);
     }
 }

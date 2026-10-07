@@ -1,14 +1,13 @@
-# Elementary Effects
+# Elementary effects
 
-OAT (one-at-a-time) trajectories through the input space. Screening: which factors matter, cheaply.
-
-> **When to use:** You have many factors (10--100+) and a limited computational budget. Morris elementary effects tell you which factors are influential and which can be fixed without the cost of a full Sobol' analysis. Typical budget: $r \times (d + 1)$ model evaluations, with $r = 10$--$50$. Compare this to Sobol', which costs $N \times (d + 2)$ with $N$ typically 1024--16384.
-
----
+Morris screening estimates the effect of changing one input at a time along
+random trajectories. It is useful when you have many factors and too few model
+runs for precise Sobol' indices. With $r$ trajectories and $d$ factors, the
+cost is $r(d+1)$ model evaluations; 10–50 trajectories is a common starting range.
 
 ## Morris 1991
 
-Morris (1991) *Technometrics* 33(2), 161--174. [[bib]](../bibliography.md#morris1991)
+Morris (1991) *Technometrics* 33(2), 161--174. [paper](https://www.stat.cmu.edu/technometrics/90-00/vol-33-02/v3302161.pdf) · [reference](../bibliography.md#morris1991)
 
 The method constructs $r$ random trajectories through a $p$-level grid on the unit hypercube $[0, 1]^d$. Each trajectory is a sequence of $d + 1$ points where consecutive points differ in exactly one coordinate (the OAT property). At each step, a single factor $x_i$ is perturbed by a fixed step $\Delta$, and the resulting change in output defines the **elementary effect** for that factor at that base point:
 
@@ -28,7 +27,7 @@ $$\mu_i^* = \frac{1}{r} \sum_{k=1}^{r} \lvert EE_i^{(k)} \rvert$$
 
 $$\sigma_i = \sqrt{\frac{1}{r - 1} \sum_{k=1}^{r} (EE_i^{(k)} - \mu_i)^2}$$
 
-$\mu_i^*$ was introduced by Campolongo et al. (2007) [[bib]](../bibliography.md#campolongo2007) to fix a cancellation problem with the signed mean $\mu_i$: for non-monotonic factors, positive and negative elementary effects average toward zero even when the factor is influential. $\mu_i^*$ uses absolute values and is the modern standard for screening.
+$\mu_i^*$ was introduced by Campolongo et al. (2007) [paper](https://doi.org/10.1016/j.envsoft.2006.10.004) · [reference](../bibliography.md#campolongo2007) to fix a cancellation problem with the signed mean $\mu_i$: for non-monotonic factors, positive and negative elementary effects average toward zero even when the factor is influential. $\mu_i^*$ averages the magnitudes of the effects, avoiding that cancellation.
 
 $\sigma_i$ indicates the degree of non-linearity or interaction effects. A factor with high $\mu_i^*$ and low $\sigma_i$ has a strong, approximately linear, additive effect. A factor with high $\sigma_i$ relative to $\mu_i^*$ participates in interactions or has a strongly non-linear effect.
 
@@ -62,24 +61,22 @@ println!("{effects}");
 // Prints μ, μ*, σ per factor.
 ```
 
-> **Verify** against the additive-linear test function $Y = \sum_{i=1}^{d} i \cdot x_i$ ($d = 8$, $r = 50$, $p = 4$, seed `[0u8; 32]`):
->
-> | Factor | $\mu_i$ | $\mu_i^*$ | $\sigma_i$ | Analytic |
-> |--------|---------|-----------|------------|----------|
-> | 0      | 1.0000  | 1.0000    | 0.0000     | $\mu = 1$, $\sigma = 0$ |
-> | 1      | 2.0000  | 2.0000    | 0.0000     | $\mu = 2$, $\sigma = 0$ |
-> | ...    | ...     | ...       | ...        | ... |
-> | 7      | 8.0000  | 8.0000    | 0.0000     | $\mu = 8$, $\sigma = 0$ |
->
-> For a purely linear function, elementary effects are constant across all trajectories: $EE_i = b_i$ regardless of the base point. The estimator recovers each coefficient exactly (to floating-point precision), and $\sigma_i = 0$. This is the degenerate case. For non-linear functions, $\sigma_i > 0$ and $\mu_i$ converges at rate $O(1/\sqrt{r})$.
+Example results against the additive-linear test function $Y = \sum_{i=1}^{d} i \cdot x_i$ ($d = 8$, $r = 50$, $p = 4$, seed `[0u8; 32]`):
 
-> **Caveat:** The identity $\mu_i^* \geq |\mu_i|$ always holds (mean of absolute values is at least the absolute value of the mean). If your results violate this, there is a bug.
+| Factor | $\mu_i$ | $\mu_i^*$ | $\sigma_i$ | Analytic |
+|--------|---------|-----------|------------|----------|
+| 0      | 1.0000  | 1.0000    | 0.0000     | $\mu = 1$, $\sigma = 0$ |
+| 1      | 2.0000  | 2.0000    | 0.0000     | $\mu = 2$, $\sigma = 0$ |
+| ...    | ...     | ...       | ...        | ... |
+| 7      | 8.0000  | 8.0000    | 0.0000     | $\mu = 8$, $\sigma = 0$ |
 
----
+For a purely linear function, elementary effects are constant across all trajectories: $EE_i = b_i$ regardless of the base point. The estimator recovers each coefficient exactly (to floating-point precision), and $\sigma_i = 0$. For nonlinear functions, elementary effects can vary with the base point.
+
+The mean absolute effect satisfies $\mu_i^* \geq |\mu_i|$, up to floating-point rounding.
 
 ## Grouped Morris
 
-Campolongo et al. (2007) *Env. Mod. Soft.* 22(10), 1509--1518. [[bib]](../bibliography.md#campolongo2007)
+Campolongo et al. (2007) *Env. Mod. Soft.* 22(10), 1509--1518. [paper](https://doi.org/10.1016/j.envsoft.2006.10.004) · [reference](../bibliography.md#campolongo2007)
 
 When inputs are naturally grouped (all parameters of a subsystem, all coefficients of one physical process), grouped Morris perturbs all factors in a group simultaneously rather than one at a time. Instead of $d + 1$ points per trajectory, there are $n_{\text{groups}} + 1$ points. Each step moves every factor in the selected group by $\Delta$.
 
@@ -134,11 +131,9 @@ for (name, ms) in group_names.iter().zip(grouped_mu_star) {
 
 The output `MorrisEffects` contains both per-factor and per-group statistics. Per-factor effects in grouped Morris record the group-level elementary effect for each member factor (individual factor contributions cannot be separated when factors move simultaneously).
 
-> **Verify:** With singleton groups (one factor per group), grouped Morris produces the same $\mu^*$ values as ungrouped Morris under the same seed.
+With singleton groups (one factor per group), grouped Morris produces the same $\mu^*$ values as ungrouped Morris under the same seed.
 
-> **Caveat:** Grouped Morris answers "does this subsystem matter?" not "which factor within the subsystem matters?" If a group screens as important, follow up with an ungrouped analysis on its member factors.
-
----
+Grouped Morris measures the effect of changing a group together. Follow up on important groups with an ungrouped analysis to distinguish their members.
 
 ## Interpreting the ($\mu^*$, $\sigma$) plane
 
@@ -146,7 +141,10 @@ The output `MorrisEffects` contains both per-factor and per-group statistics. Pe
 |--------|---------------|
 | High $\mu_i^*$, low $\sigma_i$ | Important factor, approximately linear and additive. |
 | High $\mu_i^*$, high $\sigma_i$ | Important factor involved in interactions or with strong non-linearity. |
-| Low $\mu_i^*$, low $\sigma_i$ | Non-influential factor. Candidate for fixing at its nominal value. |
-| Low $\mu_i^*$, high $\sigma_i$ | Rare. Factor with nearly cancelling effects that vary with context. Investigate. |
+| Low $\mu_i^*$, low $\sigma_i$ | Small effects in the sampled trajectories; consider further checks before fixing the factor. |
+| Low $\mu_i^*$, high $\sigma_i$ | Occasional large effects; inspect the individual trajectories. |
 
-The standard screening decision: factors with $\mu_i^*$ below some threshold are non-influential and can be excluded from a subsequent full analysis (e.g., Sobol').
+Choose a screening threshold in output units and check that the ranking is
+stable across trajectories and seeds. If you fix factors before a later Sobol'
+analysis, record their fixed values: the resulting indices describe that
+reduced model.

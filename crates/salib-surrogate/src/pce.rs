@@ -1,60 +1,50 @@
-//! Full Polynomial Chaos Expansion (PCE) via OLS regression on
-//! the truncated tensor-product polynomial basis, plus closed-form
-//! Sobol' indices from PCE coefficients.
+//! Polynomial chaos expansion (PCE) fitted by ordinary least squares.
 //!
-//! Per Sudret 2006 / Sudret 2008. The PCE
-//!
-//! ```text
-//! Y ≈ Σ_α β_α · Ψ_α(ξ)        |α| ≤ p
-//! ```
-//!
-//! where `ξ` is the input mapped to each factor's polynomial-
-//! canonical domain and `Ψ_α(ξ) = ∏ᵢ Ψ_{αᵢ}(ξᵢ)` is the
-//! tensor-product basis. Coefficients `{β_α}` solve OLS on the
-//! `(N, P)` basis matrix; once we have them, Sobol' indices fall
-//! out analytically (Sudret 2008 Eq 36-39):
+//! For independent inputs, choose a polynomial family orthogonal under
+//! each input's probability measure and form the tensor-product basis:
 //!
 //! ```text
-//! D_PCE = Σ_{α ≠ 0} β_α² · ⟨Ψ_α, Ψ_α⟩       total variance
-//!
-//! S_i      = Σ_{α : αᵢ>0, αⱼ=0 ∀j≠i}  β_α² ⟨Ψ_α, Ψ_α⟩  /  D_PCE
-//! S_{T_i}  = Σ_{α : αᵢ>0}             β_α² ⟨Ψ_α, Ψ_α⟩  /  D_PCE
+//! Y ≈ Σ_α β_α Ψ_α(ξ),    |α| ≤ p
+//! Ψ_α(ξ) = ∏ᵢ Ψ_{αᵢ}(ξᵢ)
 //! ```
 //!
-//! `S_i` (first-order) sums "main-effect" multi-indices — only
-//! factor `i` active. `S_{T_i}` (total-order) sums all multi-indices
-//! where factor `i` is active, regardless of which other factors
-//! also are. The closed-form follows from the orthogonality of the
-//! tensor-product basis and is **exact given the PCE coefficients
-//! are exact**; finite-`N` OLS introduces estimation error in the
-//! coefficients themselves.
+//! The coefficients solve an OLS problem on the `(N, P)` basis matrix.
+//! Sobol' indices of the fitted surrogate follow from coefficient sums
+//! ([Sudret 2008](https://doi.org/10.1016/j.ress.2007.04.002), §5.4, Eqs. 51 and 53):
+//!
+//! ```text
+//! D_PCE = Σ_{α ≠ 0} β_α² ⟨Ψ_α, Ψ_α⟩
+//! S_i   = Σ_{α : αᵢ>0, αⱼ=0 ∀j≠i} β_α² ⟨Ψ_α, Ψ_α⟩ / D_PCE
+//! S_Ti  = Σ_{α : αᵢ>0} β_α² ⟨Ψ_α, Ψ_α⟩ / D_PCE
+//! ```
+//!
+//! These formulas are exact for the fitted polynomial, apart from
+//! numerical error. Its indices can differ from the original model's
+//! because of basis truncation and coefficient estimation error.
 //!
 //! # Input convention
 //!
-//! `samples_canonical` is the `(N, d)` input matrix with each
-//! column already mapped to its polynomial family's canonical
-//! domain:
+//! `samples_canonical` has shape `(N, d)`. The caller maps each input
+//! to its family's reference distribution, not just its domain:
 //!
-//! - Legendre / Jacobi: `ξ ∈ [-1, 1]`.
-//! - Hermite: `ξ ∈ ℝ` (already standardized to `N(0, 1)` if input
-//!   was Normal).
-//! - Laguerre: `ξ ∈ [0, ∞)` (already scaled to `Exp(1)` if input
-//!   was Exponential).
+//! - Legendre: uniform on `[-1, 1]`.
+//! - Hermite: standard Normal `N(0, 1)`.
+//! - Laguerre: Exponential with rate 1.
+//! - Jacobi: density proportional to `(1-ξ)^alpha (1+ξ)^beta`
+//!   on `[-1, 1]`.
 //!
-//! Caller is responsible for the mapping; common patterns documented
-//! in `polynomial::PolynomialFamily` rustdoc. (may add a
-//! `Distribution`-aware convenience wrapper if a workload demands.)
+//! See [`PolynomialFamily`] for the parameter conventions. Domain
+//! validation cannot check independence or a match to the input measure.
 //!
 //! # Cost
 //!
-//! - Basis-matrix construction: `O(N · P · d)` polynomial evaluations.
-//! - OLS via Cholesky: `O(P³)` for decomposition + `O(P² · N)` for
-//!   `Ψᵀ Ψ` and `Ψᵀ Y`.
-//! - Sobol' index extraction: `O(P · d)` once coefficients are in.
+//! There are `P = (d+p)! / (d! p!)` basis terms. Building the basis
+//! matrix makes `O(N P d)` polynomial evaluations, each costing at most
+//! `O(p)`. The normal-equation solve costs `O(N P² + P³)`; coefficient
+//! grouping for Sobol' indices costs `O(P d)` at fixed degree.
 //!
-//! `P = (d+p)! / (d! · p!)`. For `d=3, p=10`: `P=286`. For
-//! `d=10, p=4`: `P=1001`. Sparse LARS  is the answer for
-//! larger `d · p`.
+//! A sparse fit can help when only a small subset of a large candidate
+//! basis is needed. Both paths still construct the candidate basis matrix.
 
 #![allow(
     clippy::similar_names,
@@ -74,10 +64,6 @@ use crate::multi_index::{enumerate_total_degree, total_degree_basis_size, MultiI
 use crate::polynomial::{evaluate, is_in_canonical_domain, norm_squared, PolynomialFamily};
 
 /// A fitted Polynomial Chaos Expansion.
-///
-/// `#[non_exhaustive]` — future fields (`fit_residual_norm`,
-/// `condition_number` for ill-conditioning detection,
-/// `loo_error` for cross-validation) land non-breaking.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
@@ -105,9 +91,8 @@ impl PolynomialChaos {
         self.coefficients.len()
     }
 
-    /// PCE-predicted output mean, `β_0` (the constant-term
-    /// coefficient). Equal to `E[Y]` in expectation under
-    /// orthogonality.
+    /// Mean of the fitted polynomial under its reference input measure:
+    /// the constant coefficient `β_0`. This estimates the model's mean.
     #[must_use]
     pub fn mean(&self) -> f64 {
         // The first multi-index in lex order is α = (0, ..., 0).
@@ -120,11 +105,9 @@ impl PolynomialChaos {
     ///
     /// Each component `ξ[k]` must lie in the canonical domain of
     /// `families[k]` (Legendre / Jacobi: `[-1, 1]`; Hermite: `ℝ`;
-    /// Laguerre: `[0, ∞)`). Out-of-domain inputs evaluate cleanly
-    /// through the polynomial recurrences but produce numerically
-    /// meaningless `ŷ` — caller is responsible. A debug-only
-    /// `debug_assert!` trips on the violation; release builds skip
-    /// the check.
+    /// Laguerre: `[0, ∞)`). Debug builds assert this condition.
+    /// Release builds permit extrapolation, whose accuracy is not
+    /// established by the fit.
     #[must_use]
     pub fn evaluate(&self, xi: &[f64]) -> f64 {
         debug_assert_eq!(xi.len(), self.d());
@@ -152,10 +135,7 @@ impl PolynomialChaos {
 }
 
 /// Sobol' indices derived analytically from PCE coefficients
-/// (Sudret 2008 Eq 36-39).
-///
-/// `#[non_exhaustive]` — future fields (per-multi-index variance
-/// contributions for diagnostic, `bootstrap_ci`) land non-breaking.
+/// (Sudret 2008, §5.4, Eqs. 51 and 53).
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
@@ -196,7 +176,7 @@ impl fmt::Display for SobolFromPce {
     }
 }
 
-/// Errors from [`fit_full_pce`].
+/// Errors from PCE fitting and coefficient analysis.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum PceError {
@@ -230,9 +210,18 @@ pub enum PceError {
         /// Number of candidate polynomial terms.
         basis_size: usize,
     },
+    /// A supplied sample or response is NaN or infinite.
+    #[error("PCE: samples and responses must contain only finite values")]
+    NonFiniteInput,
+    /// Basis evaluation, fitting, or variance arithmetic exceeded finite range.
+    #[error("PCE: basis, fit, or variance arithmetic produced a nonfinite value")]
+    NonFiniteFit,
     /// The polynomial design matrix could not be factorized.
     #[error("PCE: design matrix XᵀX is singular (Cholesky failed)")]
     SingularDesignMatrix,
+    /// Every sparse fit candidate has an undefined or nonfinite PRESS score.
+    #[error("PCE: no candidate has a finite leave-one-out error")]
+    UndefinedLooError,
     /// Output variance is zero or below the estimator threshold.
     #[error("PCE: Var(Y) is zero (model output is constant)")]
     ZeroVariance,
@@ -251,6 +240,8 @@ pub enum PceError {
 /// - [`PceError::ShapeMismatch`] / [`PceError::ZeroD`] /
 ///   [`PceError::FamiliesDimMismatch`] — input shape errors.
 /// - [`PceError::InsufficientSamples`] if `N < P`.
+/// - [`PceError::NonFiniteInput`] if a sample or response is not finite.
+/// - [`PceError::NonFiniteFit`] if basis evaluation or fitting overflows.
 /// - [`PceError::SingularDesignMatrix`] if Cholesky on `Ψᵀ Ψ`
 ///   fails (typically near-collinearity in the basis).
 ///
@@ -291,6 +282,7 @@ pub fn fit_full_pce(
             d,
         });
     }
+    validate_finite_data(samples_canonical, y)?;
     let basis_size = total_degree_basis_size(d, max_degree);
     if n < basis_size {
         return Err(PceError::InsufficientSamples { n, basis_size });
@@ -330,16 +322,26 @@ pub fn fit_full_pce(
         }
     }
 
+    if psi.iter().any(|value| !value.is_finite()) {
+        return Err(PceError::NonFiniteFit);
+    }
+
     // Solve OLS via Cholesky on the normal equations.
     let psi_t = psi.transpose();
     let xtx = &psi_t * &psi;
     let y_vec = DVector::from_iterator(n, y.iter().copied());
     let xty = &psi_t * &y_vec;
+    if xtx.iter().chain(xty.iter()).any(|value| !value.is_finite()) {
+        return Err(PceError::NonFiniteFit);
+    }
     let beta = xtx
         .cholesky()
         .ok_or(PceError::SingularDesignMatrix)?
         .solve(&xty);
 
+    if beta.iter().any(|value| !value.is_finite()) {
+        return Err(PceError::NonFiniteFit);
+    }
     let coefficients = beta.iter().copied().collect();
 
     Ok(PolynomialChaos {
@@ -350,8 +352,23 @@ pub fn fit_full_pce(
     })
 }
 
+/// Validate observations before basis evaluation or canonical-domain assertions.
+pub(crate) fn validate_finite_data(
+    samples: ArrayView2<'_, f64>,
+    y: &[f64],
+) -> Result<(), PceError> {
+    if samples
+        .iter()
+        .chain(y.iter())
+        .any(|value| !value.is_finite())
+    {
+        return Err(PceError::NonFiniteInput);
+    }
+    Ok(())
+}
+
 /// Compute Sobol' indices analytically from a fitted PCE per
-/// Sudret 2008 Eq 36-39.
+/// Sudret 2008, §5.4, Eqs. 51 and 53.
 ///
 /// # Errors
 ///
@@ -458,6 +475,22 @@ mod tests {
     }
 
     // ── Validation ────────────────────────────────────────────────
+
+    #[test]
+    fn full_pce_rejects_nonfinite_observations_and_ols_overflow() {
+        let mut x = Array2::from_shape_fn((16, 1), |(i, _)| i as f64);
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(
+                fit_full_pce(x.view(), &[invalid; 16], &[PolynomialFamily::Hermite], 1).is_err()
+            );
+            x[[0, 0]] = invalid;
+            assert!(fit_full_pce(x.view(), &[1.0; 16], &[PolynomialFamily::Hermite], 1).is_err());
+        }
+        x[[0, 0]] = 0.0;
+        // The exact constant coefficient is 1e308, but naive X^T y overflows.
+        // Until a scaled solve is used, this must fail rather than return Inf/NaN.
+        assert!(fit_full_pce(x.view(), &[1e308; 16], &[PolynomialFamily::Hermite], 0).is_err());
+    }
 
     #[test]
     fn zero_d_errors() {

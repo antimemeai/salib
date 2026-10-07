@@ -6,6 +6,7 @@ pub mod anova;
 pub mod bootstrap;
 pub mod bootstrap_given_data;
 pub mod borgonovo;
+mod conditioning;
 pub mod dgsm;
 pub mod discrepancy;
 pub mod fast;

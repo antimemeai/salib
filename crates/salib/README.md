@@ -1,20 +1,19 @@
 # salib
 
-Facade for global sensitivity analysis in Rust: validated input descriptions,
-sampling designs, and 20+ analysis methods implemented from primary papers.
-Use this crate for a complete Rust analysis. Core types are re-exported at the
-root; sampling and estimation live under `salib::samplers` and
-`salib::estimators`. Depend on individual crates for a narrower API surface.
+Global sensitivity analysis for Rust. This crate brings together input
+definitions, sampling designs, and estimators. Core types are re-exported at
+the root; sampling and estimation are in `salib::samplers` and
+`salib::estimators`. You can also depend on the component crates separately.
 
 ## Quickstart
 
-Estimate which of three independent inputs explains the Ishigami model’s output
-variance. The third input matters only through an interaction, making it a useful
-example of why both first-order (`S1`) and total-effect (`ST`) indices matter.
+This example estimates Sobol' indices for the three-input Ishigami function.
+Its third input affects the output only through an interaction, which appears
+in the total-effect index (`ST`) but not the first-order index (`S1`).
 
 ```toml
 [dependencies]
-salib = "0.2"
+salib = "0.3"
 ```
 
 ```rust
@@ -58,7 +57,7 @@ the closure with unit-cube rows; the closure applies each factor’s inverse CDF
 
 Expect `S1` near `[0.314, 0.442, 0.000]` and `ST` near
 `[0.558, 0.442, 0.244]`. Thus `x3` contributes through interactions despite its
-zero main effect. See the [step-by-step tutorial](https://github.com/antimeme-ai/salib/blob/main/docs/quickstart.md) for
+zero main effect. See the [step-by-step tutorial](https://github.com/antimemeai/salib/blob/master/docs/quickstart.md) for
 interpretation, sampler alternatives, and bootstrap intervals.
 
 ## Choose dependencies and features
@@ -75,14 +74,13 @@ interpretation, sampler alternatives, and bootstrap intervals.
 
 `full` enables samplers, estimators, surrogate, Shapley, and validation. `serde`
 adds result serialization; `arrow` adds RecordBatch conversions; `polars` adds
-DataFrame conversions and implies `arrow`. These interop features are separate
-from `full`. HDMR requires both estimator and surrogate support. Core definitions
+DataFrame conversions and implies `arrow`. Enable these separately from `full`. HDMR requires both estimator and surrogate support. Core definitions
 already support serde.
 
 ```toml
 # Core, samplers, and estimators with serial reduction fallback.
 [dependencies]
-salib = { version = "0.2", default-features = false, features = ["samplers", "estimators"] }
+salib = { version = "0.3", default-features = false, features = ["samplers", "estimators"] }
 ```
 
 Features are additive across dependencies, so another crate can still enable
@@ -91,7 +89,8 @@ identical bits across thread counts for the same binary/platform and reproducibl
 model. Kani and Stateright check bounded implementation invariants alongside
 analytic and metamorphic tests; they do not prove all estimators correct.
 
-[Documentation hub](https://github.com/antimeme-ai/salib/blob/main/docs/index.md) ·
+[Documentation hub](https://github.com/antimemeai/salib/blob/master/docs/index.md) ·
 [API reference](https://docs.rs/salib/latest/salib/)
 
-Rust 1.87 or later. MIT OR Apache-2.0.
+Rust 1.87 for default and `full` analysis features. Fresh `polars` dependency
+resolution currently requires Rust 1.88. MIT OR Apache-2.0.

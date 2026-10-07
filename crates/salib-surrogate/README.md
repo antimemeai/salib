@@ -1,10 +1,11 @@
 # salib-surrogate
 
-Polynomial Chaos Expansion (PCE) fitting and gradient-based active subspaces.
-Depend on this crate directly when building an approximation or extracting
-variance indices from coefficients without the direct estimator suite. Use
-`salib` with `surrogate` for integrated analyses; RS-HDMR lives in
-`salib-estimators` under its `surrogate` feature.
+Fit polynomial chaos expansions (PCE), compute their Sobol' indices, or find
+active subspaces from model gradients. These APIs are also available through
+`salib` with the `surrogate` feature. RS-HDMR is in `salib-estimators`, under
+its own `surrogate` feature. Its automatic distribution mapping is currently
+supported only for independent uniform and normal inputs; other distributions
+return `HdmrError::UnsupportedDistribution`.
 
 | API | Purpose |
 |---|---|
@@ -31,16 +32,16 @@ assert!((indices.first_order[0] - 1.0).abs() < 1e-10);
 
 ```toml
 [dependencies]
-salib-surrogate = "0.2"
+salib-surrogate = "0.3"
 ndarray = "0.16"
 ```
 
 Map inputs into the canonical domain of each family: Legendre uses `[-1,1]`,
 Hermite uses standard-normal coordinates, and other families have their own
-weight/domain conventions. Analytic indices describe the fitted surrogate under
-that law, not automatically the original simulator. Check held-out predictions
-and index stability before interpreting them. `serde` enables persistence of
-models and results.
+weight/domain conventions. The indices describe the fitted surrogate under
+those distributions. Check predictions on held-out data and the stability of
+the indices before using them to describe the original model. `serde`
+serializes fitted models and results.
 
 [API reference](https://docs.rs/salib-surrogate/latest/salib_surrogate/).
 MIT OR Apache-2.0.

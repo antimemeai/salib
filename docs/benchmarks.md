@@ -1,6 +1,6 @@
 # Benchmarks
 
-Current measurements for the subset of methods in [the harness](../benches/sensitivity.rs), plus sampling. This is a timing comparison, not an estimator accuracy test.
+Timings for the methods and samplers in [the benchmark harness](../benches/sensitivity.rs). Accuracy must be checked separately.
 
 ## Methodology
 
@@ -8,11 +8,11 @@ Measured on **2026-10-07**, source revision `bda959d` (documentation changes do 
 
 [Criterion](https://github.com/bheisler/criterion.rs) 0.5; 100 samples per benchmark; 0.5 s warmup and 1 s requested measurement time. Statistic: **median** of Criterion's per-iteration timing estimates.
 
-These local release-build measurements are for orientation. The requested window is short; Criterion extends collection when 100 samples need longer and reports outliers. They are not precise cross-machine performance claims. Repeat with longer windows on your target hardware; concurrent processes and thermal state affect timing.
+These release-build measurements used short timing windows. Criterion extends collection when the requested sample count needs longer and reports outliers. For performance decisions, repeat with longer windows on the target hardware; other processes and machine temperature affect timings.
 
-**Workload:** the Ishigami formula with three inputs. The current harness feeds unit-cube samples directly, so this is **not** canonical Ishigami on `[-pi,pi]`. Sobol' G uses eight unit-cube inputs. These timings do not establish convergence to canonical analytic indices.
+**Workload:** the three-input Ishigami formula evaluated on unit-cube samples. This differs from its canonical `[-pi,pi]` input range. Sobol' G uses eight unit-cube inputs. These timings do not establish convergence to canonical analytic indices.
 
-**What is timed:** [fn] methods include model evaluation and estimation on a prebuilt design; sampling is outside their timed loops. Given-data methods time analysis of precomputed inputs/outputs. DGSM excludes gradient acquisition and output-variance computation. Sampling rows time design construction separately.
+**Timed operations:** [fn] methods include model evaluation and estimation on a prebuilt design; sampling is outside their timed loops. Given-data methods time analysis of precomputed inputs/outputs. DGSM excludes gradient acquisition and output-variance computation. Sampling rows time design construction separately.
 
 ## Analysis
 
@@ -57,7 +57,7 @@ These local release-build measurements are for orientation. The requested window
 
 Morris $N$ is trajectory count $r$; total evaluations are $r \times (d + 1)$.
 
-FAST $N$ values are odd (required by the algorithm).
+The benchmark uses odd FAST sample counts. These recorded timings predate the 0.3.0 correctness fixes; rerun the harness to measure the corrected algorithms.
 
 ## Sampling
 

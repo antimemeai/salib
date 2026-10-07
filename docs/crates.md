@@ -1,8 +1,12 @@
-# Crate Map
+# Crate map
 
-salib has eight release crates plus the unpublished `salib-models` verification crate. The `salib` facade re-exports the most common types and functions; depend on individual crates for finer control over compile times and dependencies.
-Their READMEs give direct-dependency examples. Feature flags control exposed APIs;
-transitive dependencies can still include crates behind a disabled facade feature.
+The `salib` crate re-exports the library's types and functions. You can also
+depend on its component crates separately; each README shows how. There are
+eight published crates and one unpublished crate, `salib-models`, for model
+checking.
+
+Feature flags control which APIs `salib` exposes. Disabling a feature does not
+necessarily remove its crate from the build: another dependency may still use it.
 
 ---
 
@@ -38,7 +42,7 @@ Types that everything else depends on.
 | Type | Role |
 |------|------|
 | `Problem` | Factor names, distributions, dimension |
-| `ProblemBuilder` | Fluent builder for `Problem` |
+| `ProblemBuilder` | Construct and validate a `Problem` |
 | `Factor` | Name + distribution for one input |
 | `Distribution` | `Uniform`, `Normal`, `LogNormal`, `Triangular`, `Beta` |
 | `RngState` | Serializable ChaCha20 RNG with `fork(salt)` for named streams |
@@ -122,8 +126,8 @@ status 2. There are no working `sample`, `run`, or `analyze` commands. Use the
 
 ### salib-models (unpublished)
 
-Four Stateright models exercise finite protocol invariants. This crate is for
-workspace verification, not an application dependency. Run with
+Four Stateright models check problem construction, RNG use, Saltelli assembly,
+and result collection within finite domains. Run them from the workspace with
 `cargo run -p salib-models --release`.
 
 ---
@@ -142,13 +146,13 @@ All flags on the `salib` facade crate:
 | `validation` | no | Analytic test functions |
 | `serde` | no | `Serialize`/`Deserialize` on result types |
 | `arrow` | no | Arrow `RecordBatch` conversions |
-| `polars` | no | Polars `DataFrame` conversions |
+| `polars` | no | Polars `DataFrame` conversions; fresh dependency resolution currently needs Rust 1.88 |
 | `full` | no | Everything except `serde`, `arrow`, `polars` |
 
 ```toml
-# Kitchen sink
-salib = { version = "0.2", features = ["full", "serde"] }
+# All analysis methods and result serialization
+salib = { version = "0.3", features = ["full", "serde"] }
 
 # Minimal analysis features (other dependencies can still enable rayon)
-salib = { version = "0.2", default-features = false, features = ["samplers", "estimators"] }
+salib = { version = "0.3", default-features = false, features = ["samplers", "estimators"] }
 ```
