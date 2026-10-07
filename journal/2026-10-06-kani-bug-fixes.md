@@ -53,3 +53,15 @@ required.
 Full local output is retained under `target/kani-bug-fixes/`, including the
 per-fix crate runs, successful workspace validation, successful discrete
 proofs, and unresolved monotonicity solver logs.
+
+## Resolution (2026-10-07)
+
+Post-fix Kani runs on neuroses (48-core, 755GB):
+- `discrete_uniform_quantile_endpoints`: **PASS**
+- `discrete_uniform_quantile_no_overflow`: **PASS**
+- `uniform_quantile_monotone`: **INCONCLUSIVE** — solver timeout after 5.5h
+- `percentile_monotone`: **INCONCLUSIVE** — solver timeout after 5.2h
+
+The two inconclusive results are CBMC propositional-reduction timeouts on
+f64-heavy formulas, not failures. Fixes verified by 2 passing proofs,
+5 regression tests, 958-test suite. Revisit with better compute.

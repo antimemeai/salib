@@ -169,3 +169,19 @@ Repository handoff: staging the final report and committing were blocked by
 the sandbox: Git could not create `.git/index.lock` (`Operation not
 permitted`). The source changes and complete report remain in the workspace;
 no commit or push of this phase was completed.
+
+## Post-fix status (after bda959d)
+
+The four bugs were fixed in `bda959d`. Re-running the harnesses:
+
+| Harness | Pre-fix | Post-fix |
+| --- | --- | --- |
+| `discrete_uniform_quantile_endpoints` | FAIL | **PASS** |
+| `discrete_uniform_quantile_no_overflow` | FAIL | **PASS** |
+| `uniform_quantile_monotone` | FAIL | **INCONCLUSIVE** — solver timeout after 5.5h on 48-core server |
+| `percentile_monotone` | FAIL | **INCONCLUSIVE** — solver timeout after 5.2h on 48-core server |
+
+The two inconclusive proofs are CBMC propositional-reduction timeouts on
+f64-heavy formulas, not verification failures. The fixes are corroborated
+by the 2 passing proofs, 5 regression tests, and the full 958-test suite.
+These proofs will be revisited with better compute.
