@@ -44,7 +44,7 @@
 //! Both are sampler-agnostic. Differ in numerical behavior at
 //! finite `N`; converge to the same true `S_1` as `N → ∞`.
 //!
-//! # Determinism
+//! # Bit-reproducibility
 //!
 //! Pure under `(X, Y)`. Stable sort + ordinal ranking → deterministic
 //! class membership. All sums route through `tree_sum`. Same `(X, Y)`
@@ -108,15 +108,26 @@ impl fmt::Display for GivenDataSobolIndices {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum GivenDataSobolError {
+    /// Input and output shapes are incompatible.
     #[error("given-data Sobol': shape mismatch — X has {x_rows} rows, y has {y_len} elements")]
-    ShapeMismatch { x_rows: usize, y_len: usize },
+    ShapeMismatch {
+        /// Number of rows in the input matrix.
+        x_rows: usize,
+        /// Number of output observations.
+        y_len: usize,
+    },
+    /// At least one input dimension is required.
     #[error("given-data Sobol': d must be ≥ 1, got 0")]
     ZeroD,
     /// `N < 16` — too few samples for meaningful partitioning.
     /// Floor matches `borgonovo` for consistency across the
     /// partition-based given-data estimator family.
     #[error("given-data Sobol': N must be ≥ 16, got {n}")]
-    InsufficientSamples { n: usize },
+    InsufficientSamples {
+        /// Sample count supplied by the caller.
+        n: usize,
+    },
+    /// Output variance is zero or below the estimator threshold.
     #[error("given-data Sobol': Var(Y) is zero (model output is constant)")]
     ZeroVariance,
 }

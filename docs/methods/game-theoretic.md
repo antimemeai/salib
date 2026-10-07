@@ -2,7 +2,12 @@
 
 Shapley effects — attribute output variance via cooperative game theory.
 
-> **When to use:** Your inputs are correlated and you need a complete, non-overlapping variance attribution. Sobol' indices are ambiguous under dependence — first-order indices can exceed 1.0 and total-effect indices no longer sum meaningfully. Shapley effects always sum to $\operatorname{Var}(Y)$. Worth the computational cost when Sobol' indices are unreliable.
+> **When to use:** Allocate variance, including interactions, across independent
+> inputs. The theory supports dependence with appropriate conditional sampling,
+> but salib implements independent marginals only. It cannot perform correlated-input
+> Shapley analysis. Its `sh` vector is in output-variance units;
+> divide by `var_y` for dimensionless shares. Population inequalities do not
+> guarantee the same ordering for finite-sample estimates.
 
 ---
 
@@ -22,7 +27,9 @@ The defining property (Song 2016 Eq 10):
 
 $$\sum_{i=1}^{d} \text{Sh}_i = \operatorname{Var}(Y)$$
 
-This holds exactly — not approximately — even when inputs are dependent. First-order and total-order Sobol' indices lack this property under correlation. For independent inputs, Song 2016 Theorem 2 gives the ordering:
+This is an identity for population, unnormalized Shapley values, including
+dependent-input games with the correct conditional law. It is not a statement
+about exact equality of finite-sample estimates. First-order and total-order Sobol' indices lack this property under correlation. For independent inputs, Song 2016 Theorem 2 gives the ordering:
 
 $$V_i \leq \text{Sh}_i \leq V_{T_i}$$
 

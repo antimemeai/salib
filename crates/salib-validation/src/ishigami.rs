@@ -133,6 +133,18 @@ pub fn ishigami_gradient(x: &[f64]) -> [f64; 3] {
 
 /// Closed-form analytic Sobol' indices for Ishigami at the given
 /// `(a, b)` parameters. Per Saltelli Primer 2008 Eq 5.16-5.18.
+///
+/// These values assume three independent `Uniform(-pi,pi)` inputs. Evaluating
+/// the same formula on unit-cube coordinates produces different indices.
+///
+/// # Examples
+///
+/// ```rust
+/// use salib_validation::ishigami::analytic_indices;
+/// let indices = analytic_indices(7.0, 0.1);
+/// assert!((indices.first_order[0] - 0.3139).abs() < 0.0001);
+/// assert!(indices.total_order[2] > 0.24);
+/// ```
 #[must_use]
 pub fn analytic_indices(a: f64, b: f64) -> SobolIndicesAnalytic {
     use std::f64::consts::PI;

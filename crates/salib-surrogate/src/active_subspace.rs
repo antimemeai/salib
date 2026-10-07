@@ -44,7 +44,7 @@
 //! # Caller interface
 //!
 //! Caller computes gradients (e.g., via
-//! [`salib_estimators::finite_difference_gradients`] or
+//! [`salib_estimators::finite_difference_gradients`](https://docs.rs/salib-estimators/latest/salib_estimators/fn.finite_difference_gradients.html) or
 //! analytical) and passes the `(M, d)` matrix to
 //! [`compute_active_subspace`]. The function returns the full
 //! eigendecomposition plus a heuristic active-subspace dimension
@@ -103,12 +103,19 @@ impl ActiveSubspace {
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum ActiveSubspaceError {
+    /// The gradient matrix has no observations.
     #[error("active-subspace: gradients must have ≥ 1 sample, got 0 rows")]
     EmptyGradients,
+    /// At least one input dimension is required.
     #[error("active-subspace: d must be ≥ 1, got 0 cols")]
     ZeroD,
+    /// The eigenvalue gap threshold must be finite and greater than one.
     #[error("active-subspace: gap_threshold must be > 1 if supplied, got {threshold}")]
-    InvalidGapThreshold { threshold: f64 },
+    InvalidGapThreshold {
+        /// Eigenvalue gap threshold supplied.
+        threshold: f64,
+    },
+    /// The gradient covariance produced a nonfinite eigenspectrum.
     #[error("active-subspace: all eigenvalues are non-finite (NaN/Inf in gradients?)")]
     NonFiniteSpectrum,
 }

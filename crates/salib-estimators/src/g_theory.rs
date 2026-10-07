@@ -15,73 +15,125 @@ use salib_core::RngState;
 use crate::bootstrap::percentile_ci;
 use crate::bootstrap_given_data::{BootstrapCi, BootstrapGivenDataError};
 
+/// Measurement design to decompose. Only `Crossed` is implemented.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum GTheoryDesign {
+    /// Fully crossed persons × items × raters design; implemented.
     Crossed,
+    /// Nested design; currently rejected as unsupported.
     Nested,
+    /// Mixed crossed/nested design; currently rejected as unsupported.
     Mixed,
 }
 
+/// Invalid grids or undefined generalizability/reliability estimates.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum GTheoryError {
+    /// Only the fully crossed design is implemented.
     #[error("g-theory: only crossed design is implemented in V1")]
     UnsupportedDesign,
+    /// The number of varying factors does not match the design.
     #[error("g-theory: expected 3 varying factors, got {got}")]
-    FactorCountMismatch { got: usize },
+    FactorCountMismatch {
+        /// Number of varying factors supplied.
+        got: usize,
+    },
+    /// The observations do not fill the required balanced grid.
     #[error("g-theory: balanced design expected {expected_cells} cells, got {actual_cells}")]
     UnbalancedDesign {
+        /// Number of cells required by the balanced grid.
         expected_cells: usize,
+        /// Number of observations supplied.
         actual_cells: usize,
     },
+    /// More than one observation occupies a grid cell.
     #[error("g-theory: duplicate observation for one balanced-grid cell")]
     DuplicateCell,
+    /// A required grid cell has no observation.
     #[error("g-theory: missing observation for one balanced-grid cell")]
     MissingCell,
+    /// A grid axis has too few levels for this analysis.
     #[error("g-theory: axis {axis} must have length >= 2, got {len}")]
-    DegenerateAxis { axis: &'static str, len: usize },
+    DegenerateAxis {
+        /// Name of the grid axis that failed validation.
+        axis: &'static str,
+        /// Length of the grid axis supplied.
+        len: usize,
+    },
+    /// Output variance is zero or below the estimator threshold.
     #[error("g-theory: total variance is zero")]
     ZeroVariance,
+    /// A reliability numerator or denominator is nonfinite, or a nonzero numerator has zero denominator.
     #[error(
         "g-theory: {coefficient} is undefined because its numerator or denominator is nonfinite, or its denominator collapsed to zero while sigma_p remained non-zero"
     )]
-    UndefinedReliability { coefficient: &'static str },
+    UndefinedReliability {
+        /// Name of the reliability coefficient that could not be computed.
+        coefficient: &'static str,
+    },
 }
 
+/// Errors from G-theory estimation or bootstrap resampling.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum GTheoryBootstrapError {
+    /// Generalizability-theory estimation failed.
     #[error("g-theory bootstrap: estimator failed: {0}")]
     GTheory(#[from] GTheoryError),
+    /// The bootstrap arguments are invalid.
     #[error("g-theory bootstrap: invalid bootstrap params: {0}")]
     Bootstrap(#[from] BootstrapGivenDataError),
+    /// Every bootstrap draw failed; no interval can be computed.
     #[error("g-theory bootstrap: every resample failed")]
     AllResamplesFailed,
 }
 
+/// Seven crossed-design variance components and relative/absolute reliability.
+///
+/// Components use method-of-moments estimates clamped at zero. Optional interval
+/// fields are populated only by bootstrap estimation.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct GTheoryResult {
+    /// Nonnegative estimated variance component for persons.
     pub sigma_p: f64,
+    /// Nonnegative estimated variance component for items.
     pub sigma_i: f64,
+    /// Nonnegative estimated variance component for raters.
     pub sigma_r: f64,
+    /// Nonnegative estimated variance component for person × item interaction.
     pub sigma_pi: f64,
+    /// Nonnegative estimated variance component for person × rater interaction.
     pub sigma_pr: f64,
+    /// Nonnegative estimated variance component for item × rater interaction.
     pub sigma_ir: f64,
+    /// Nonnegative estimated variance component for three-way interaction/residual.
     pub sigma_pir: f64,
+    /// Relative-decision reliability coefficient G.
     pub g_coefficient: f64,
+    /// Absolute-decision reliability coefficient Phi.
     pub phi_coefficient: f64,
+    /// Lower percentile interval bound for variance component; `None` without bootstrap.
     pub variance_component_ci_low: Option<Vec<f64>>,
+    /// Upper percentile interval bound for variance component; `None` without bootstrap.
     pub variance_component_ci_high: Option<Vec<f64>>,
+    /// Lower percentile interval bound for g coefficient; `None` without bootstrap.
     pub g_coefficient_ci_low: Option<f64>,
+    /// Upper percentile interval bound for g coefficient; `None` without bootstrap.
     pub g_coefficient_ci_high: Option<f64>,
+    /// Lower percentile interval bound for phi coefficient; `None` without bootstrap.
     pub phi_coefficient_ci_low: Option<f64>,
+    /// Upper percentile interval bound for phi coefficient; `None` without bootstrap.
     pub phi_coefficient_ci_high: Option<f64>,
+    /// Number of requested bootstrap resamples; `None` without bootstrap.
     pub bootstrap_iterations: Option<usize>,
+    /// Significance level for intervals of nominal coverage `1-alpha`; `None` without bootstrap.
     pub bootstrap_alpha: Option<f64>,
+    /// Number of failed resamples omitted from the percentile pool; `None` without bootstrap.
     pub bootstrap_skipped: Option<usize>,
 }
 
@@ -128,12 +180,17 @@ impl GTheoryResult {
     }
 }
 
+/// Projected G and Phi reliability for a specified item/rater count.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DStudyPoint {
+    /// Number of items in the projected design (at least one).
     pub n_items: usize,
+    /// Number of raters in the projected design (at least one).
     pub n_raters: usize,
+    /// Relative-decision reliability coefficient G.
     pub g_coefficient: f64,
+    /// Absolute-decision reliability coefficient Phi.
     pub phi_coefficient: f64,
 }
 
@@ -159,6 +216,27 @@ impl fmt::Display for GTheoryResult {
     }
 }
 
+/// Estimate variance components for a balanced `(persons, items, raters)` grid.
+///
+/// All axes require at least two levels. Only [`GTheoryDesign::Crossed`] is
+/// implemented. Components are clamped at zero before calculating G (relative
+/// reliability) and Phi (absolute reliability).
+///
+/// # Errors
+///
+/// Rejects unsupported designs, undersized axes, zero variance, and undefined
+/// reliability ratios. See [`GTheoryError`].
+///
+/// # Examples
+///
+/// ```rust
+/// use ndarray::Array3;
+/// use salib_estimators::{estimate_g_theory_pir, GTheoryDesign};
+/// let grid = Array3::from_shape_fn((3, 2, 2), |(p, i, r)|
+///     p as f64 + 0.1 * i as f64 + 0.2 * r as f64);
+/// let result = estimate_g_theory_pir(grid.view(), GTheoryDesign::Crossed).unwrap();
+/// assert!(result.g_coefficient > 0.9);
+/// ```
 pub fn estimate_g_theory_pir(
     grid: ArrayView3<'_, f64>,
     design: GTheoryDesign,
@@ -348,6 +426,12 @@ pub fn estimate_g_theory_pir(
     })
 }
 
+/// Estimate G-theory components/reliability and attach percentile intervals.
+///
+/// Resamples persons, items, and raters independently with replacement. Requires
+/// positive `n_resamples` and finite `0 < alpha < 1`; advances `rng`. Failed draws
+/// are skipped and counted. Returns [`GTheoryBootstrapError`] on invalid original
+/// grid/arguments or if every draw fails.
 pub fn estimate_g_theory_pir_with_bootstrap(
     grid: ArrayView3<'_, f64>,
     design: GTheoryDesign,
@@ -370,6 +454,13 @@ pub fn estimate_g_theory_pir_with_bootstrap(
     Ok(result)
 }
 
+/// Bootstrap crossed-design variance components, G, and Phi.
+///
+/// Returns component intervals in `[p, i, r, pi, pr, ir, pir]` order, followed by
+/// `(low, high)` intervals for G and Phi. Requires a valid crossed grid, positive
+/// `n_resamples`, and finite `0 < alpha < 1`. Resamples each axis independently,
+/// advances `rng`, and records failed draws in [`BootstrapCi::n_skipped`]. Returns
+/// [`GTheoryBootstrapError`] if the original grid/arguments or all draws fail.
 #[allow(clippy::type_complexity)]
 pub fn bootstrap_g_theory_pir(
     grid: ArrayView3<'_, f64>,
@@ -453,6 +544,11 @@ pub fn bootstrap_g_theory_pir(
     Ok((component_ci, (g_low, g_high), (phi_low, phi_high)))
 }
 
+/// Project reliability at new item/rater counts using fitted variance components.
+///
+/// No model evaluations are performed. Counts must be at least one. Returns
+/// [`GTheoryError::DegenerateAxis`] for zero counts and
+/// [`GTheoryError::UndefinedReliability`] for invalid reliability ratios.
 pub fn project_g_theory_d_study(
     result: &GTheoryResult,
     n_items: usize,

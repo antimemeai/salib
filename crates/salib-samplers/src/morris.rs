@@ -22,7 +22,7 @@
 //! `R · (d + 1)` model evaluations — same as Morris's original
 //! design.
 //!
-//! # Determinism
+//! # Bit-reproducibility
 //!
 //! Pure under `(d, r, levels, RngState)`. Same `RngState` in →
 //! bit-identical output.
@@ -85,14 +85,24 @@ pub struct MorrisTrajectories {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum MorrisError {
+    /// At least one Morris trajectory is required.
     #[error("Morris: r must be ≥ 1, got 0")]
     ZeroR,
+    /// At least one input dimension is required.
     #[error("Morris: d must be ≥ 1, got 0")]
     ZeroD,
+    /// Morris grid levels must be at least two.
     #[error("Morris: levels must be ≥ 2, got {levels}")]
-    LevelsBelowTwo { levels: u32 },
+    LevelsBelowTwo {
+        /// Number of grid levels supplied.
+        levels: u32,
+    },
+    /// Morris grid levels must be even.
     #[error("Morris: levels must be even (Saltelli convention), got {levels}")]
-    LevelsOdd { levels: u32 },
+    LevelsOdd {
+        /// Number of grid levels supplied.
+        levels: u32,
+    },
 }
 
 /// Build `r` Morris trajectories for a `d`-factor problem on a grid

@@ -1,40 +1,46 @@
 # salib-surrogate
 
-[![crates.io](https://img.shields.io/crates/v/salib-surrogate.svg)](https://crates.io/crates/salib-surrogate)
-[![docs.rs](https://img.shields.io/docsrs/salib-surrogate)](https://docs.rs/salib-surrogate)
-[![license](https://img.shields.io/crates/l/salib-surrogate.svg)](https://github.com/antimeme-ai/salib)
+Polynomial Chaos Expansion (PCE) fitting and gradient-based active subspaces.
+Depend on this crate directly when building an approximation or extracting
+variance indices from coefficients without the direct estimator suite. Use
+`salib` with `surrogate` for integrated analyses; RS-HDMR lives in
+`salib-estimators` under its `surrogate` feature.
 
-Surrogate models for sensitivity analysis: Polynomial Chaos Expansion
-(PCE) and active subspaces. Part of the
-[salib](https://crates.io/crates/salib) workspace.
+| API | Purpose |
+|---|---|
+| `fit_full_pce` → `PolynomialChaos` | Dense least-squares fit over a total-degree polynomial basis |
+| `fit_sparse_pce`, `SparseSolver`, `TruncationScheme` | LARS/OMP term selection, with fit diagnostics |
+| `PolynomialFamily`, `MultiIndex` | Canonical polynomial families and basis exponents |
+| `sobol_indices_from_pce` → `SobolFromPce` | Analytic variance indices from orthogonal coefficients |
+| `compute_active_subspace` → `ActiveSubspace` | Eigendecomposition of the uncentered gradient covariance |
 
-Most users should depend on `salib` with the `surrogate` feature. Use
-`salib-surrogate` directly when you only need PCE fitting without the
-full estimator suite.
+## Example
 
-## What's inside
+```rust
+use ndarray::array;
+use salib_surrogate::{fit_full_pce, sobol_indices_from_pce, PolynomialFamily};
 
-| Component | Function | Reference |
-|---|---|---|
-| Full PCE (OLS) | `fit_full_pce` | Xiu & Karniadakis (2002) |
-| Sparse PCE (LARS, OMP) | `fit_sparse_pce` | Blatman & Sudret (2011) |
-| Sobol' from PCE | `sobol_indices_from_pce` | Sudret (2008) |
-| Active subspaces | `compute_active_subspace` | Constantine (2015) |
+// Legendre inputs are canonical Uniform(-1,1), not unit-cube coordinates.
+let x = array![[-1.0], [-0.5], [0.0], [0.5], [1.0]];
+let y = [-1.0, 0.0, 1.0, 2.0, 3.0]; // y = 1 + 2x.
+let pce = fit_full_pce(x.view(), &y, &[PolynomialFamily::Legendre], 1).unwrap();
+assert!((pce.evaluate(&[0.25]) - 1.5).abs() < 1e-10);
+let indices = sobol_indices_from_pce(&pce).unwrap();
+assert!((indices.first_order[0] - 1.0).abs() < 1e-10);
+```
 
-PCE fitting operates on canonical [-1, 1]^d inputs with Legendre or
-Hermite polynomial families. Truncation schemes include total-degree
-and hyperbolic cross.
+```toml
+[dependencies]
+salib-surrogate = "0.2"
+ndarray = "0.16"
+```
 
-`SparseSolver::Lars` and `SparseSolver::Omp` are both available; both
-recover Ishigami Sobol' indices within 0.02 absolute using fewer than
-80 active terms out of 286 candidates.
+Map inputs into the canonical domain of each family: Legendre uses `[-1,1]`,
+Hermite uses standard-normal coordinates, and other families have their own
+weight/domain conventions. Analytic indices describe the fitted surrogate under
+that law, not automatically the original simulator. Check held-out predictions
+and index stability before interpreting them. `serde` enables persistence of
+models and results.
 
-## Feature flags
-
-| Flag | Default | Effect |
-|---|---|---|
-| `serde` | no | `Serialize`/`Deserialize` on all types (includes ndarray serde) |
-
-## License
-
-MIT OR Apache-2.0, at your option.
+[API reference](https://docs.rs/salib-surrogate/latest/salib_surrogate/).
+MIT OR Apache-2.0.

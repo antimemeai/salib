@@ -35,7 +35,7 @@
 //!   (vs `M = 4` for FAST). The permutation creates a different
 //!   spectral landscape than the search curve.
 //!
-//! # Determinism
+//! # Bit-reproducibility
 //!
 //! Pure under `(X, Y, harmonic)`. Stable sort on `X[:, i]` gives a
 //! reproducible permutation; tie-breaking falls back to input
@@ -101,7 +101,12 @@ impl fmt::Display for RbdFastIndices {
 pub enum RbdFastError {
     /// `X.nrows() != y.len()`.
     #[error("RBD-FAST: shape mismatch — X has {x_rows} rows, y has {y_len} elements")]
-    ShapeMismatch { x_rows: usize, y_len: usize },
+    ShapeMismatch {
+        /// Number of rows in the input matrix.
+        x_rows: usize,
+        /// Number of output observations.
+        y_len: usize,
+    },
     /// `X.ncols() == 0` — no factors.
     #[error("RBD-FAST: d must be ≥ 1, got 0")]
     ZeroD,
@@ -115,8 +120,11 @@ pub enum RbdFastError {
          minimum={minimum}); else Plischke correction denominator collapses"
     )]
     InsufficientSamples {
+        /// Sample count supplied by the caller.
         n: usize,
+        /// Maximum harmonic supplied by the caller.
         harmonic: u32,
+        /// Minimum sample count required by this configuration.
         minimum: usize,
     },
     /// Total variance below the FFT noise floor — model is constant.

@@ -35,8 +35,9 @@ pub struct SobolIndices {
 }
 
 impl SobolIndices {
-    /// Construct from raw values. No validation; estimator code is
-    /// the only producer.
+    /// Construct from raw values without validation.
+    ///
+    /// Callers must maintain field lengths and the triangular second-order layout.
     #[must_use]
     pub fn new(
         n: usize,
@@ -66,9 +67,9 @@ impl SobolIndices {
 pub struct SobolIndicesWithCi {
     /// Point-estimate indices on the original (non-bootstrapped) data.
     pub indices: SobolIndices,
-    /// 95% percentile CI per first-order index `(low, high)`.
+    /// `(1-alpha)` percentile CI per first-order index `(low, high)`.
     pub first_order_ci: Vec<(f64, f64)>,
-    /// 95% percentile CI per total-order index `(low, high)`.
+    /// `(1-alpha)` percentile CI per total-order index `(low, high)`.
     pub total_order_ci: Vec<(f64, f64)>,
     /// Number of bootstrap resamples used.
     pub bootstrap_resamples: usize,

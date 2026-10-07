@@ -1,21 +1,4 @@
-//! `salib-estimators` — sensitivity-index estimators.
-//!
-//! Variance-based Sobol' (Saltelli2010, Jansen, Janon, Owen), Morris
-//! elementary effects, FAST/eFAST/RBD-FAST, Borgonovo δ, PAWN, DGSM,
-//! regression (SRC/SRRC/PCC/PRCC), given-data Sobol', ANOVA, G-theory,
-//! fractional factorial, and discrepancy measures.
-//!
-//! # Feature flags
-//!
-//! - **`surrogate`** — enables the [`hdmr`] module (RS-HDMR via PCE
-//!   decomposition). Pulls in `salib-surrogate`.
-//!
-//! # Determinism
-//!
-//! All sums route through `salib_core::reduce::tree_*` —
-//! bit-identical regardless of rayon partitioning. Bootstrap RNG
-//! draws use `ChaCha20Rng` derived from the caller's `RngState`.
-
+#![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 

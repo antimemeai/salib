@@ -107,7 +107,12 @@ pub enum HdmrError {
     /// Factor distribution has infinite support and no matching
     /// polynomial family (Legendre requires finite `[lo, hi]`).
     #[error("factor {index} has unsupported distribution for HDMR: {reason}")]
-    UnsupportedDistribution { index: usize, reason: String },
+    UnsupportedDistribution {
+        /// Zero-based factor index.
+        index: usize,
+        /// Explanation of why the distribution has no supported canonical mapping.
+        reason: String,
+    },
 }
 
 /// RS-HDMR via PCE decomposition.

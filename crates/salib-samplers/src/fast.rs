@@ -35,7 +35,7 @@
 //!     complementary[k] = (k mod m) + 1                         # `SALib` parity
 //! ```
 //!
-//! # Determinism
+//! # Bit-reproducibility
 //!
 //! Pure under `(d, n_per_factor, harmonic, RngState)`. Same
 //! `RngState` in → bit-identical `FastDesign` out, with
@@ -99,12 +99,19 @@ pub struct FastDesign {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum FastError {
+    /// The supplied harmonic count is outside the supported range.
     #[error("FAST: harmonic must be in 1..=32, got {harmonic}")]
-    InvalidHarmonic { harmonic: u32 },
+    InvalidHarmonic {
+        /// Maximum harmonic supplied by the caller.
+        harmonic: u32,
+    },
+    /// At least one input dimension is required.
     #[error("FAST: d must be ≥ 1, got 0")]
     ZeroD,
+    /// At least one harmonic is required.
     #[error("FAST: harmonic must be ≥ 1, got 0")]
     ZeroHarmonic,
+    /// The sample count is too small for the requested analysis.
     #[error(
         "FAST: n_per_factor must satisfy n_per_factor ≥ 4·harmonic² + 1 \
          (got n_per_factor={n_per_factor}, harmonic={harmonic}, \
@@ -112,8 +119,11 @@ pub enum FastError {
          to 0 and the complementary frequency budget vanishes"
     )]
     InsufficientSamples {
+        /// Number of curve points per factor supplied.
         n_per_factor: usize,
+        /// Maximum harmonic supplied by the caller.
         harmonic: u32,
+        /// Minimum sample count required by this configuration.
         minimum: usize,
     },
 }

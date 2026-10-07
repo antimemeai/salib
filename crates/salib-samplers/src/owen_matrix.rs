@@ -36,7 +36,7 @@
 //! handle the Owen-only branches. Cleaner: separate `OwenMatrix`
 //! type with its own constructor.
 //!
-//! # Determinism
+//! # Bit-reproducibility
 //!
 //! `build_owen_matrix` calls the sampler **once** with `dim = 3·d`
 //! and partitions the output into `A | B | C`. Same `RngState` in →
@@ -92,10 +92,15 @@ impl OwenMatrix {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum OwenMatrixError {
+    /// At least one sample row is required.
     #[error("Owen: n must be ≥ 1, got 0")]
     ZeroN,
+    /// Owen sampling requires a base dimension divisible by three.
     #[error("Owen: sampler dim {dim} is not divisible by 3 (expected 3·d)")]
-    NotDivisibleByThree { dim: usize },
+    NotDivisibleByThree {
+        /// Input dimension supplied by the caller.
+        dim: usize,
+    },
 }
 
 /// Build an Owen three-vector sampling matrix for a `d`-factor

@@ -1,34 +1,48 @@
 # salib-shapley
 
-[![crates.io](https://img.shields.io/crates/v/salib-shapley.svg)](https://crates.io/crates/salib-shapley)
-[![docs.rs](https://img.shields.io/docsrs/salib-shapley)](https://docs.rs/salib-shapley)
-[![license](https://img.shields.io/crates/l/salib-shapley.svg)](https://github.com/antimeme-ai/salib)
+Random-permutation Shapley effects using nested Monte Carlo from Song, Nelson,
+and Staum (2016). Depend on this crate directly to allocate interaction variance
+among **independent** inputs. Use `salib` with `shapley` for the facade API;
+use Sobol' estimators when you need separate main and total effects.
 
-Shapley effects estimator for global sensitivity analysis. Part of the
-[salib](https://crates.io/crates/salib) workspace.
+| API | Purpose |
+|---|---|
+| `estimate_shapley` | Evaluate marginal variance contributions along sampled permutations |
+| `ShapleyIndices` | Unnormalized per-factor `sh`, output variance `var_y`, permutation count |
+| `ShapleyError` | Reject empty factor sets or insufficient sampling counts |
 
-Most users should depend on `salib` with the `shapley` feature. Use
-`salib-shapley` directly when you want Shapley effects without pulling
-in samplers or other estimators.
+## Example
 
-## What's inside
+```rust
+use salib_core::{Distribution, RngState};
+use salib_shapley::estimate_shapley;
 
-A single estimator: `estimate_shapley`, implementing the permutation-based
-algorithm of Song, Nelson & Staum (2016) "Shapley effects for global
-sensitivity analysis", *SIAM/ASA J. Uncertainty Quantification* 4(1).
+let inputs = vec![Distribution::Uniform { lo: 0.0, hi: 1.0 }; 2];
+let mut rng = RngState::from_seed([42; 32]);
+// Counts: permutations, outer samples, inner samples, variance samples.
+let result = estimate_shapley(
+    &inputs, |x| x[0] + x[1], 100, 1, 3, 1024, &mut rng,
+).unwrap();
+assert_eq!(result.sh.len(), 2);
+let shares: Vec<f64> = result.sh.iter().map(|sh| sh / result.var_y).collect();
+println!("variance shares: {shares:?}");
+```
 
-Shapley effects allocate output variance fairly among correlated inputs,
-unlike Sobol' indices which assume factor independence. When inputs are
-independent, Shapley effects reduce to total-order Sobol' indices.
+```toml
+[dependencies]
+salib-core = "0.2"
+salib-shapley = "0.2"
+```
 
-Returns `ShapleyIndices` with per-factor `sh` values summing to 1.
+This API samples physical input values from the supplied distributions itself;
+its model closure does not receive unit-cube coordinates. Validate distributions
+before use. The budget is `n_var + n_perm * n_outer * n_inner * (d-1)` model calls.
+More permutations reduce Monte Carlo uncertainty. `sh` is in output-variance
+units; divide by `var_y` for dimensionless shares. Marginal contributions
+telescope to the estimated total variance, up to rounding and tiny-negative
+clamping; individual contributions remain uncertain. Keep the model reproducible even though
+the closure accepts `FnMut`. Dependent-input conditional sampling is not
+implemented. `serde` serializes result types.
 
-## Feature flags
-
-| Flag | Default | Effect |
-|---|---|---|
-| `serde` | no | `Serialize`/`Deserialize` on `ShapleyIndices` |
-
-## License
-
-MIT OR Apache-2.0, at your option.
+[API reference](https://docs.rs/salib-shapley/latest/salib_shapley/).
+MIT OR Apache-2.0.

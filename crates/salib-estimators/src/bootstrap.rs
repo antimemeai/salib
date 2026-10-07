@@ -56,6 +56,7 @@ use crate::sobol_indices::{BootstrapMethod, SobolIndices, SobolIndicesWithCi};
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum BootstrapError {
+    /// The significance or quantile level must be finite and strictly between zero and one.
     #[error("bootstrap: alpha must be finite and strictly between 0 and 1")]
     InvalidAlpha,
     /// At least one bootstrap draw is required.
@@ -73,13 +74,13 @@ pub enum BootstrapError {
 /// Cost: `n × (d+2)` model evaluations (same as the point estimate)
 /// + `O(B × n × d)` bookkeeping.
 ///
-/// # Determinism
+/// # Bit-reproducibility
 ///
 /// Same `RngState` in → bit-identical CIs out. This guarantee assumes
 /// the `model` closure is a *pure function* of its argument (or
 /// otherwise deterministic across calls). A closure that mutates
 /// captured state (counters, accumulators, internal RNGs) defeats
-/// the determinism contract — the `RngState` invariant covers only
+/// the bit-reproducibility contract — the `RngState` invariant covers only
 /// the bootstrap-resample draws, not the model evaluations.
 ///
 /// # Errors
@@ -87,6 +88,27 @@ pub enum BootstrapError {
 /// Returns [`BootstrapError::InvalidAlpha`] unless `0 < alpha < 1` and alpha is finite.
 /// Returns [`BootstrapError::ZeroResamples`] for zero bootstrap draws or
 /// [`BootstrapError::EmptySample`] for a zero-row design.
+///
+/// `alpha = 0.05` requests nominal 95% percentile intervals. Sampling and
+/// resampling uncertainty remain even when results are bit-reproducible. Row
+/// bootstrap on unscrambled QMC is not a calibrated QMC error guarantee.
+///
+/// # Examples
+///
+/// ```rust
+/// use salib_core::RngState;
+/// use salib_samplers::{build_saltelli_matrix, LhsSampler};
+/// use salib_estimators::estimate_saltelli2010_with_bootstrap;
+/// let mut rng = RngState::from_seed([7; 32]);
+/// let design = build_saltelli_matrix(&LhsSampler::classic(2), 128, false, &mut rng)
+///     .unwrap();
+/// let mut resampling = rng.fork(b"intervals");
+/// let result = estimate_saltelli2010_with_bootstrap(
+///     &design, |x| x[0], 100, 0.05, &mut resampling,
+/// ).unwrap();
+/// assert_eq!(result.bootstrap_resamples, 100);
+/// assert!(result.first_order_ci[0].0 <= result.first_order_ci[0].1);
+/// ```
 #[allow(clippy::many_single_char_names)]
 pub fn estimate_saltelli2010_with_bootstrap<F>(
     matrix: &SaltelliMatrix,

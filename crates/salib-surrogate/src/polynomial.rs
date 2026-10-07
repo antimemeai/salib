@@ -61,7 +61,12 @@ pub enum PolynomialFamily {
     Laguerre,
     /// Jacobi `Pₙ^(α,β)(x)` on `[-1, 1]`. Orthogonal w.r.t. Beta
     /// measure with shape parameters `(α+1, β+1)`.
-    Jacobi { alpha: f64, beta: f64 },
+    Jacobi {
+        /// First Jacobi exponent; must exceed -1.
+        alpha: f64,
+        /// Second Jacobi exponent; must exceed -1.
+        beta: f64,
+    },
 }
 
 /// Evaluate the orthogonal polynomial `Ψₙ(x)` of the given family

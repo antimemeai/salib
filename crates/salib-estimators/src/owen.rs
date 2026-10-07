@@ -46,7 +46,7 @@
 //!   Owen 2013 concerns first-order only. Pair with Jansen 1999
 //!   (PR 7) for total-order.
 //!
-//! # Determinism
+//! # Bit-reproducibility
 //!
 //! Pure under `(matrix, model)`. All sums route through
 //! `tree_sum` / `tree_dot`. Same matrix + model in → bit-identical

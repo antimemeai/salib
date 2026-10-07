@@ -1,19 +1,4 @@
-//! `salib-surrogate` — surrogate models for sensitivity analysis.
-//!
-//! - Polynomial Chaos Expansion (PCE) with full OLS and sparse LARS
-//!   coefficient selection (Blatman-Sudret 2011).
-//! - Analytic Sobol' indices from PCE coefficients (Sudret 2008).
-//! - Active subspace dimension reduction (Constantine 2014).
-//!
-//! Surrogate models build a function approximation and then derive
-//! sensitivity indices analytically — a fundamentally different
-//! dataflow from the direct-MC estimators in `salib-estimators`.
-//!
-//! # Determinism
-//!
-//! Polynomial evaluation and multi-index enumeration are pure;
-//! same input → bit-identical output.
-
+#![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 

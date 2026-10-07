@@ -31,30 +31,52 @@ use crate::bootstrap_given_data::{BootstrapCi, BootstrapGivenDataError};
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum AnovaError {
+    /// A grid axis has too few levels for this analysis.
     #[error("anova: axis {axis} must have length >= 2, got {len}")]
-    DegenerateAxis { axis: &'static str, len: usize },
+    DegenerateAxis {
+        /// Name of the grid axis that failed validation.
+        axis: &'static str,
+        /// Length of the grid axis supplied.
+        len: usize,
+    },
+    /// The number of varying factors does not match the design.
     #[error("anova: expected {expected} varying factors, got {got}")]
-    FactorCountMismatch { expected: usize, got: usize },
+    FactorCountMismatch {
+        /// Required number of varying factors.
+        expected: usize,
+        /// Number of varying factors supplied.
+        got: usize,
+    },
+    /// The observations do not fill the required balanced grid.
     #[error("anova: balanced design expected {expected_cells} cells, got {actual_cells}")]
     UnbalancedDesign {
+        /// Number of cells required by the balanced grid.
         expected_cells: usize,
+        /// Number of observations supplied.
         actual_cells: usize,
     },
+    /// More than one observation occupies a grid cell.
     #[error("anova: duplicate observation for one balanced-grid cell")]
     DuplicateCell,
+    /// A required grid cell has no observation.
     #[error("anova: missing observation for one balanced-grid cell")]
     MissingCell,
+    /// Output variance is zero or below the estimator threshold.
     #[error("anova: total variance is zero")]
     ZeroVariance,
 }
 
+/// Errors from ANOVA estimation or axis-resampling bootstrap.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum AnovaBootstrapError {
+    /// ANOVA estimation failed.
     #[error("anova bootstrap: estimator failed: {0}")]
     Anova(#[from] AnovaError),
+    /// The bootstrap arguments are invalid.
     #[error("anova bootstrap: invalid bootstrap params: {0}")]
     Bootstrap(#[from] BootstrapGivenDataError),
+    /// Every bootstrap draw failed; no interval can be computed.
     #[error("anova bootstrap: every resample failed")]
     AllResamplesFailed,
 }
@@ -64,23 +86,41 @@ pub enum AnovaBootstrapError {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct AnovaTwoWayResult {
+    /// Fraction of total sums of squares attributed to row.
     pub v_row: f64,
+    /// Fraction of total sums of squares attributed to column.
     pub v_column: f64,
+    /// Fraction of total sums of squares attributed to interaction.
     pub v_interaction: f64,
+    /// Fraction of total sums of squares attributed to residual.
     pub v_residual: f64,
+    /// Mean square for row.
     pub ms_row: f64,
+    /// Mean square for column.
     pub ms_column: f64,
+    /// Mean square for interaction.
     pub ms_interaction: f64,
+    /// Mean square for residual.
     pub ms_residual: f64,
+    /// F statistic for row; `None` when no valid test denominator is available.
     pub f_row: Option<f64>,
+    /// F statistic for column; `None` when no valid test denominator is available.
     pub f_column: Option<f64>,
+    /// F statistic for interaction; `None` when no valid test denominator is available.
     pub f_interaction: Option<f64>,
+    /// Upper-tail F-test p-value for row; `None` when the test is unavailable.
     pub p_row: Option<f64>,
+    /// Upper-tail F-test p-value for column; `None` when the test is unavailable.
     pub p_column: Option<f64>,
+    /// Upper-tail F-test p-value for interaction; `None` when the test is unavailable.
     pub p_interaction: Option<f64>,
+    /// Lower percentile interval bound for variance fraction; `None` without bootstrap.
     pub variance_fraction_ci_low: Option<Vec<f64>>,
+    /// Upper percentile interval bound for variance fraction; `None` without bootstrap.
     pub variance_fraction_ci_high: Option<Vec<f64>>,
+    /// Number of requested bootstrap resamples; `None` without bootstrap.
     pub bootstrap_iterations: Option<usize>,
+    /// Significance level for intervals of nominal coverage `1-alpha`; `None` without bootstrap.
     pub bootstrap_alpha: Option<f64>,
 }
 
@@ -89,39 +129,73 @@ pub struct AnovaTwoWayResult {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct AnovaThreeWayResult {
+    /// Fraction of total sums of squares attributed to data.
     pub v_data: f64,
+    /// Fraction of total sums of squares attributed to brittleness.
     pub v_brittleness: f64,
+    /// Fraction of total sums of squares attributed to inference.
     pub v_inference: f64,
+    /// Fraction of total sums of squares attributed to data × brittleness.
     pub v_data_brittleness: f64,
+    /// Fraction of total sums of squares attributed to data × inference.
     pub v_data_inference: f64,
+    /// Fraction of total sums of squares attributed to brittleness × inference.
     pub v_brittleness_inference: f64,
+    /// Fraction of total sums of squares attributed to data × brittleness × inference.
     pub v_data_brittleness_inference: f64,
+    /// Fraction of total sums of squares attributed to residual.
     pub v_residual: f64,
+    /// Mean square for data.
     pub ms_data: f64,
+    /// Mean square for brittleness.
     pub ms_brittleness: f64,
+    /// Mean square for inference.
     pub ms_inference: f64,
+    /// Mean square for data × brittleness.
     pub ms_data_brittleness: f64,
+    /// Mean square for data × inference.
     pub ms_data_inference: f64,
+    /// Mean square for brittleness × inference.
     pub ms_brittleness_inference: f64,
+    /// Mean square for data × brittleness × inference.
     pub ms_data_brittleness_inference: f64,
+    /// Mean square for residual.
     pub ms_residual: f64,
+    /// F statistic for data; `None` when no valid test denominator is available.
     pub f_data: Option<f64>,
+    /// F statistic for brittleness; `None` when no valid test denominator is available.
     pub f_brittleness: Option<f64>,
+    /// F statistic for inference; `None` when no valid test denominator is available.
     pub f_inference: Option<f64>,
+    /// F statistic for data × brittleness; `None` when no valid test denominator is available.
     pub f_data_brittleness: Option<f64>,
+    /// F statistic for data × inference; `None` when no valid test denominator is available.
     pub f_data_inference: Option<f64>,
+    /// F statistic for brittleness × inference; `None` when no valid test denominator is available.
     pub f_brittleness_inference: Option<f64>,
+    /// F statistic for data × brittleness × inference; `None` when no valid test denominator is available.
     pub f_data_brittleness_inference: Option<f64>,
+    /// Upper-tail F-test p-value for data; `None` when the test is unavailable.
     pub p_data: Option<f64>,
+    /// Upper-tail F-test p-value for brittleness; `None` when the test is unavailable.
     pub p_brittleness: Option<f64>,
+    /// Upper-tail F-test p-value for inference; `None` when the test is unavailable.
     pub p_inference: Option<f64>,
+    /// Upper-tail F-test p-value for data × brittleness; `None` when the test is unavailable.
     pub p_data_brittleness: Option<f64>,
+    /// Upper-tail F-test p-value for data × inference; `None` when the test is unavailable.
     pub p_data_inference: Option<f64>,
+    /// Upper-tail F-test p-value for brittleness × inference; `None` when the test is unavailable.
     pub p_brittleness_inference: Option<f64>,
+    /// Upper-tail F-test p-value for data × brittleness × inference; `None` when the test is unavailable.
     pub p_data_brittleness_inference: Option<f64>,
+    /// Lower percentile interval bound for variance fraction; `None` without bootstrap.
     pub variance_fraction_ci_low: Option<Vec<f64>>,
+    /// Upper percentile interval bound for variance fraction; `None` without bootstrap.
     pub variance_fraction_ci_high: Option<Vec<f64>>,
+    /// Number of requested bootstrap resamples; `None` without bootstrap.
     pub bootstrap_iterations: Option<usize>,
+    /// Significance level for intervals of nominal coverage `1-alpha`; `None` without bootstrap.
     pub bootstrap_alpha: Option<f64>,
 }
 
@@ -263,6 +337,27 @@ impl fmt::Display for AnovaThreeWayResult {
     }
 }
 
+/// Decompose an unreplicated balanced `(rows, columns)` grid.
+///
+/// Each axis must have at least two levels and total variation must exceed the
+/// estimator threshold. `v_*` fields are sums-of-squares **fractions**, not raw
+/// variance components. Residual fraction is zero; main-effect F tests use the
+/// interaction mean square, and interaction F/p values are `None`.
+///
+/// # Errors
+///
+/// Returns [`AnovaError::DegenerateAxis`] for an undersized axis or
+/// [`AnovaError::ZeroVariance`] for a constant/near-constant grid.
+///
+/// # Examples
+///
+/// ```rust
+/// use ndarray::array;
+/// use salib_estimators::estimate_anova_two_way;
+/// let grid = array![[0.0, 1.0], [2.0, 4.0]];
+/// let result = estimate_anova_two_way(grid.view()).unwrap();
+/// assert!((result.v_row + result.v_column + result.v_interaction - 1.0).abs() < 1e-12);
+/// ```
 pub fn estimate_anova_two_way(grid: ArrayView2<'_, f64>) -> Result<AnovaTwoWayResult, AnovaError> {
     let a = grid.nrows();
     let b = grid.ncols();
@@ -344,6 +439,17 @@ pub fn estimate_anova_two_way(grid: ArrayView2<'_, f64>) -> Result<AnovaTwoWayRe
     })
 }
 
+/// Decompose an unreplicated balanced three-axis grid.
+///
+/// Axes map to the result's data, brittleness, and inference labels in that order.
+/// `v_*` fields are fractions of total sums of squares; residual is zero. Each axis
+/// must have at least two levels. Inferential statistics use interaction terms as
+/// denominators, rather than a replicated error estimate.
+///
+/// # Errors
+///
+/// Returns [`AnovaError::DegenerateAxis`] for an undersized axis or
+/// [`AnovaError::ZeroVariance`] for a constant/near-constant grid.
 pub fn estimate_anova_three_way(
     grid: ArrayView3<'_, f64>,
 ) -> Result<AnovaThreeWayResult, AnovaError> {
@@ -575,6 +681,13 @@ pub fn estimate_anova_three_way(
     })
 }
 
+/// Estimate ANOVA and attach percentile intervals for its component fractions.
+///
+/// Uses the same grid requirements as [`estimate_anova_two_way`]. Resamples row and column
+/// levels independently with replacement; preserves the crossed layout. Requires
+/// `n_resamples > 0` and finite `0 < alpha < 1`. Advances `rng`. Failed resamples
+/// are skipped; returns [`AnovaBootstrapError`] if the original grid/arguments are
+/// invalid or every draw fails.
 pub fn estimate_anova_two_way_with_bootstrap(
     grid: ArrayView2<'_, f64>,
     n_resamples: usize,
@@ -590,6 +703,13 @@ pub fn estimate_anova_two_way_with_bootstrap(
     Ok(result)
 }
 
+/// Estimate ANOVA and attach percentile intervals for its component fractions.
+///
+/// Uses the same grid requirements as [`estimate_anova_three_way`]. Resamples three axis
+/// levels independently with replacement; preserves the crossed layout. Requires
+/// `n_resamples > 0` and finite `0 < alpha < 1`. Advances `rng`. Failed resamples
+/// are skipped; returns [`AnovaBootstrapError`] if the original grid/arguments are
+/// invalid or every draw fails.
 pub fn estimate_anova_three_way_with_bootstrap(
     grid: ArrayView3<'_, f64>,
     n_resamples: usize,
@@ -605,6 +725,12 @@ pub fn estimate_anova_three_way_with_bootstrap(
     Ok(result)
 }
 
+/// Bootstrap ANOVA variance fractions by resampling row and column levels.
+///
+/// Intervals follow component field order, including residual. Requires a valid
+/// grid, positive resample count, and finite `0 < alpha < 1`. Advances `rng`;
+/// [`BootstrapCi::n_skipped`] counts failed draws. Returns [`AnovaBootstrapError`]
+/// for invalid arguments or if every resample fails.
 pub fn bootstrap_anova_two_way(
     grid: ArrayView2<'_, f64>,
     n_resamples: usize,
@@ -650,6 +776,12 @@ pub fn bootstrap_anova_two_way(
     build_bootstrap_ci(&per_component, n_resamples, alpha, n_skipped)
 }
 
+/// Bootstrap ANOVA variance fractions by resampling three axis levels.
+///
+/// Intervals follow component field order, including residual. Requires a valid
+/// grid, positive resample count, and finite `0 < alpha < 1`. Advances `rng`;
+/// [`BootstrapCi::n_skipped`] counts failed draws. Returns [`AnovaBootstrapError`]
+/// for invalid arguments or if every resample fails.
 pub fn bootstrap_anova_three_way(
     grid: ArrayView3<'_, f64>,
     n_resamples: usize,

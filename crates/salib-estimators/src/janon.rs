@@ -61,7 +61,7 @@
 //!   Janon's paper concerns first-order only). Pair with Jansen 1999
 //!   from `saltelli2010` for total-order coverage.
 //!
-//! # Determinism
+//! # Bit-reproducibility
 //!
 //! Pure under `(matrix, model)`. All sums route through
 //! `tree_sum` / `tree_dot`. Same matrix + model in → bit-identical

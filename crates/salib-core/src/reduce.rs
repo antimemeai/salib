@@ -1,59 +1,23 @@
-//! Deterministic f64 reductions for saltelli — fixed-tree pairwise
-//! folds whose output is bit-identical regardless of rayon
-//! partitioning.
+//! Fixed pairwise floating-point reductions.
 //!
-//! # The float-associativity problem
+//! [`tree_sum`] combines adjacent values and carries an unpaired tail through
+//! each round. [`par_tree_sum`] uses power-of-two [`BLOCK`] chunks, preserving
+//! the same arithmetic grouping independently of rayon scheduling. The serial
+//! fallback keeps that grouping when the `parallel` feature is disabled.
 //!
-//! `f64 + f64` is not associative. If rayon partitions a length-N
-//! vector differently across runs (different machine, different
-//! rayon version, different available cores), `xs.par_iter().sum()`
-//! produces different bit-level f64 values. For Sobol' indices
-//! computed as `(1/N) Σ f(B)_j (f(A_Bⁱ)_j - f(A)_j)`, that means
-//! bit-different indices across runs of the same seed. Unacceptable
-//! for ledger byte-exactness (per
-//! ).
+//! Dot products form ordered products before reduction; variance uses a
+//! two-pass centered sum divided by `N-1`. These choices provide
+//! bit-reproducibility for the same inputs, binary, and platform. They do not
+//! guarantee mathematical exactness or immunity to overflow.
 //!
-//! # The defense — block-then-tree
-//!
-//! 1. Partition `xs` into fixed-size [`BLOCK`] chunks.
-//! 2. Each chunk reduces sequentially via [`tree_sum`] — pairwise
-//!    fold, halving in place each round, deterministic in-block
-//!    order. Per-chunk sums are written to a `Vec<f64>` at known
-//!    indices via [`rayon::slice::ParallelSlice::par_chunks`] +
-//!    `map(...).collect()`. `par_chunks` is an
-//!    `IndexedParallelIterator` — output order is fixed by chunk
-//!    index regardless of which thread computed which chunk.
-//! 3. The per-chunk sum vector reduces via the same [`tree_sum`].
-//!    Sequential, pairwise, deterministic.
-//!
-//! Result: bit-identical to a single-threaded `tree_sum(xs)`
-//! regardless of rayon thread count. Pinned by
-//! `tck/saltelli/rng-determinism/features/tree_fold_invariance.feature`.
-//!
-//! # Why these primitives, not `par_iter().sum()`
-//!
-//! `clippy::disallowed_methods` extension in workspace `clippy.toml`
-//! bans `rayon::iter::ParallelIterator::{sum, reduce, reduce_with,
-//! fold}` for any saltelli crate that opts in via
-//! `#![deny(clippy::disallowed_methods)]`. `salib-core` opts in
-//! at the crate root. Future saltelli crates opt in as they land.
-//! See  § "Banned
-//! methods."
-//!
-//! # Cost
-//!
-//! ~5–10% slower than `par_iter().sum()` per
-//!  (one extra pass over per-block
-//! sums). Accepted for byte-exact reproducibility under the
-//! "pay-in-disk-not-speed" posture in `CLAUDE.md` § "Way of working."
+//! Unit and integration tests check edge cases and thread-count invariance;
+//! bounded Kani harnesses check small-tree IEEE-754 properties.
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
-/// Per-chunk size for the parallel block-then-tree reduction. Fixed;
-/// changing it would change reduction-tree shape and therefore
-/// bit-level results. Future workload-tuned per-`Experiment` blocks
-/// would land via ADR.
+/// Per-chunk size for the parallel block-then-tree reduction. a power of two,
+/// so chunk boundaries align with levels of the sequential pairwise tree.
 pub const BLOCK: usize = 1 << 12;
 
 /// Sequential pairwise tree-fold sum. O(N) work, O(log N) reduction
@@ -92,6 +56,14 @@ pub fn tree_sum(xs: &[f64]) -> f64 {
 /// then reduces the per-chunk sums via [`tree_sum`] sequentially.
 /// Bit-identical to `tree_sum(xs)` regardless of rayon thread count
 /// or worker partition pattern.
+///
+/// # Examples
+///
+/// ```rust
+/// use salib_core::{par_tree_sum, tree_sum};
+/// let values: Vec<f64> = (0..10_001).map(|i| i as f64 / 3.0).collect();
+/// assert_eq!(tree_sum(&values).to_bits(), par_tree_sum(&values).to_bits());
+/// ```
 #[must_use]
 pub fn par_tree_sum(xs: &[f64]) -> f64 {
     if xs.len() <= BLOCK {

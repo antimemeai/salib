@@ -83,16 +83,27 @@ impl fmt::Display for ShapleyIndices {
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum ShapleyError {
+    /// The input distribution list is empty.
     #[error("shapley: factor count k must be ≥ 1, got 0")]
     ZeroFactors,
+    /// At least one permutation is required.
     #[error("shapley: n_perm must be ≥ 1, got 0")]
     ZeroPermutations,
+    /// At least one outer sample is required.
     #[error("shapley: n_outer must be ≥ 1, got 0")]
     ZeroOuter,
+    /// At least two inner samples are required to estimate conditional variance.
     #[error("shapley: n_inner must be ≥ 2 (sample variance ill-defined for n < 2), got {n_inner}")]
-    InsufficientInner { n_inner: usize },
+    InsufficientInner {
+        /// Inner sample count supplied.
+        n_inner: usize,
+    },
+    /// At least two observations are required to estimate output variance.
     #[error("shapley: n_var must be ≥ 2, got {n_var}")]
-    InsufficientVar { n_var: usize },
+    InsufficientVar {
+        /// Variance sample count supplied.
+        n_var: usize,
+    },
 }
 
 /// Estimate Shapley effects on independent inputs via Song 2016
@@ -115,6 +126,23 @@ pub enum ShapleyError {
 /// - [`ShapleyError::ZeroOuter`] if `n_outer == 0`.
 /// - [`ShapleyError::InsufficientInner`] if `n_inner < 2`.
 /// - [`ShapleyError::InsufficientVar`] if `n_var < 2`.
+///
+/// Inputs are sampled from the supplied independent distributions; the model
+/// receives physical values. `sh` contains unnormalized variance contributions; divide by `var_y` for shares.
+/// Dependent-input conditional sampling is not supported.
+///
+/// # Examples
+///
+/// ```rust
+/// use salib_core::{Distribution, RngState};
+/// use salib_shapley::estimate_shapley;
+/// let mut rng = RngState::from_seed([42; 32]);
+/// let result = estimate_shapley(
+///     &[Distribution::Uniform { lo: 0.0, hi: 1.0 }],
+///     |x| x[0], 10, 1, 3, 128, &mut rng,
+/// ).unwrap();
+/// assert!((result.sh[0] / result.var_y - 1.0).abs() < 1e-12);
+/// ```
 pub fn estimate_shapley<F>(
     distributions: &[Distribution],
     mut model: F,

@@ -54,7 +54,7 @@
 //! `S₁` lives in `saltelli2010` (designed) and `rbd_fast` (given-
 //! data); the Borgonovo module focuses on `δ`.
 //!
-//! # Determinism
+//! # Bit-reproducibility
 //!
 //! Pure under `(X, Y)`. KDE evaluation is fully deterministic
 //! (closed-form Gaussian sum). Partitioning uses ordinal ranking;
@@ -117,15 +117,25 @@ impl fmt::Display for BorgonovoIndices {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum BorgonovoError {
+    /// Input and output shapes are incompatible.
     #[error("Borgonovo δ: shape mismatch — X has {x_rows} rows, y has {y_len} elements")]
-    ShapeMismatch { x_rows: usize, y_len: usize },
+    ShapeMismatch {
+        /// Number of rows in the input matrix.
+        x_rows: usize,
+        /// Number of output observations.
+        y_len: usize,
+    },
+    /// At least one input dimension is required.
     #[error("Borgonovo δ: d must be ≥ 1, got 0")]
     ZeroD,
     /// `N < 16` — too few samples for meaningful KDE + partitioning.
     /// `SALib`'s default `M ≥ 2` requires at least a few samples per
     /// class; we floor at `N = 16` to keep the estimator stable.
     #[error("Borgonovo δ: N must be ≥ 16, got {n}")]
-    InsufficientSamples { n: usize },
+    InsufficientSamples {
+        /// Sample count supplied by the caller.
+        n: usize,
+    },
     /// Y has zero range (constant model).
     #[error("Borgonovo δ: Y has zero range (model output is constant)")]
     ZeroVariance,

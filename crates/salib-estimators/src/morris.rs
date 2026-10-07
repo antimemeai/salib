@@ -28,7 +28,7 @@
 //! and downstream Severity-test API consume `μ*` as the screening
 //! statistic with `σ` as the non-linearity / interaction indicator.
 //!
-//! # Determinism
+//! # Bit-reproducibility
 //!
 //! Pure under `(trajectories, model)`. All sums route through
 //! `salib_core::reduce::tree_*`. No RNG; the trajectory sampler
@@ -63,6 +63,7 @@ use salib_samplers::MorrisTrajectories;
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum EmptyError {
+    /// At least one trajectory is required.
     #[error("Morris: cannot estimate effects from zero trajectories")]
     ZeroTrajectories,
 }
@@ -221,6 +222,18 @@ impl fmt::Display for MorrisEffects {
 ///
 /// Returns `EmptyError` if `trajectories.r == 0` (zero trajectories
 /// is degenerate; can't compute mean over zero samples).
+///
+/// # Examples
+///
+/// ```rust
+/// use salib_core::RngState;
+/// use salib_samplers::build_morris_trajectories;
+/// use salib_estimators::estimate_morris_effects;
+/// let mut rng = RngState::from_seed([42; 32]);
+/// let design = build_morris_trajectories(2, 10, 4, &mut rng).unwrap();
+/// let effects = estimate_morris_effects(&design, |x| x[0] + 2.0 * x[1]).unwrap();
+/// assert!((effects.mu_star[1] - 2.0).abs() < 1e-12);
+/// ```
 #[allow(clippy::many_single_char_names)]
 pub fn estimate_morris_effects<F>(
     trajectories: &MorrisTrajectories,

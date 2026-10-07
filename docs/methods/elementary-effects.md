@@ -55,10 +55,7 @@ Grid levels (`p`) must be even (Saltelli convention). `p = 4` is the standard ch
 use salib::estimators::estimate_morris_effects;
 
 let effects = estimate_morris_effects(&trajectories, |x| {
-    // Ishigami function
-    x[0].sin()
-        + 7.0 * x[1].sin().powi(2)
-        + 0.1 * x[2].powi(4) * x[0].sin()
+    x.iter().enumerate().map(|(i, &xi)| (i + 1) as f64 * xi).sum()
 }).unwrap();
 
 println!("{effects}");

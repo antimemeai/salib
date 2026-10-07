@@ -23,7 +23,7 @@
 //! Per the LHS implementations in
 //! `egobox-doe` and `SALib`.
 //!
-//! # Determinism
+//! # Bit-reproducibility
 //!
 //! Per dimension, the RNG advance is deterministic:
 //! 1. Fisher-Yates draws `n - 1` `u32` values for the permutation.

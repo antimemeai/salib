@@ -12,6 +12,8 @@ CLI binary for salib: sample, run, and analyze sensitivity analyses.
 [[bin]]
 name = "salib"
 path = "src/main.rs"
+# The CLI stub has no API docs; its name collides with the facade library.
+doc = false
 
 [lib]
 path = "src/lib.rs"

@@ -59,7 +59,7 @@
 //! helper [`finite_difference_gradients`]. Complex-step FD and
 //! Adjoint
 //!
-//! # Determinism
+//! # Bit-reproducibility
 //!
 //! Pure under `(gradients, poincare_constants, var_y)`. All sums
 //! route through `salib_core::tree_sum`. Same inputs in →
@@ -129,23 +129,39 @@ impl fmt::Display for DgsmIndices {
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum DgsmError {
+    /// Input and output shapes are incompatible.
     #[error(
         "DGSM: shape mismatch — gradients has {gradient_rows}×{gradient_cols}, \
          poincare_constants has length {poincare_len}"
     )]
     ShapeMismatch {
+        /// Number of gradient observations.
         gradient_rows: usize,
+        /// Number of gradient components per observation.
         gradient_cols: usize,
+        /// Number of Poincaré constants supplied.
         poincare_len: usize,
     },
+    /// The gradient matrix has no observations.
     #[error("DGSM: empty samples — gradient matrix has zero rows")]
     EmptyGradients,
+    /// At least one input dimension is required.
     #[error("DGSM: d must be ≥ 1, got 0")]
     ZeroD,
+    /// Output variance is zero or below the estimator threshold.
     #[error("DGSM: Var(Y) must be > 0 (got {var_y}); model output is constant")]
-    ZeroVariance { var_y: f64 },
+    ZeroVariance {
+        /// Output variance supplied by the caller.
+        var_y: f64,
+    },
+    /// A Poincaré constant is negative or nonfinite.
     #[error("DGSM: poincare_constants[{factor}] = {value} is invalid (must be ≥ 0)")]
-    NegativePoincareConstant { factor: usize, value: f64 },
+    NegativePoincareConstant {
+        /// Zero-based factor index that failed validation.
+        factor: usize,
+        /// Value that failed validation.
+        value: f64,
+    },
 }
 
 /// Errors from [`poincare_constant`].
@@ -160,7 +176,10 @@ pub enum PoincareError {
          implement via Roustant 2017 numerical FE or \
          supply a constant directly"
     )]
-    Unsupported { distribution_kind: &'static str },
+    Unsupported {
+        /// Name of the unsupported distribution variant.
+        distribution_kind: &'static str,
+    },
 }
 
 /// Estimate DGSM `νᵢ` and Poincaré-bounded `Sᵀᵢ` upper bound.

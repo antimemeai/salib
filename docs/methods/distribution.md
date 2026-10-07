@@ -6,6 +6,8 @@ Sensitivity through the lens of the full output distribution, not just its varia
 
 ---
 
+<a id="borgonovo-delta"></a>
+
 ## Borgonovo $\delta$
 
 Borgonovo (2007) *Rel. Eng. Sys. Safety* 92(6), 771--784. [[bib]](../bibliography.md#borgonovo2007)

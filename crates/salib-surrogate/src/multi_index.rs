@@ -87,16 +87,21 @@ impl MultiIndex {
 
 /// Errors from [`enumerate_total_degree`] / [`enumerate_hyperbolic`].
 ///
-/// `Eq` is intentionally not derived because [`InvalidHyperbolicQ`]
+/// `Eq` is intentionally not derived because [`MultiIndexError::InvalidHyperbolicQ`]
 /// carries an `f64`. `PartialEq` is sufficient for `assert_eq!` style
 /// comparisons in tests.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum MultiIndexError {
+    /// At least one input dimension is required.
     #[error("multi-index: d must be ≥ 1, got 0")]
     ZeroD,
+    /// The hyperbolic exponent must be finite and in `(0,1]`.
     #[error("multi-index: hyperbolic q must be in (0, 1], got {q}")]
-    InvalidHyperbolicQ { q: f64 },
+    InvalidHyperbolicQ {
+        /// Hyperbolic norm exponent, in `(0,1]` for valid truncation.
+        q: f64,
+    },
 }
 
 /// Enumerate all multi-indices `α ∈ ℕ^d` with `|α| ≤ max_degree`,

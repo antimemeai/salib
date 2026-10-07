@@ -1,81 +1,106 @@
 # salib
 
-Global sensitivity analysis for Rust, implemented from the primary
-literature.
+Global sensitivity analysis for Rust, implemented from the primary literature.
+20+ methods cover variance attribution, screening, distributional changes,
+gradients, regression, and surrogates.
 
-**Bit-reproducible**: identical `RngState` produces identical results
-regardless of thread count. Parallel reductions use a tree-structured
-accumulation strategy to eliminate float-associativity nondeterminism under
-[rayon](https://docs.rs/rayon).
+## Why salib?
+
+For a model already written in Rust, salib keeps sampling and estimation in
+compiled code without a Python boundary. Compared with using Python SALib:
+
+- **Native execution:** model closures and array operations run in Rust;
+  [benchmarks](docs/benchmarks.md) describe measured costs and their scope.
+- **Typed designs:** separate Saltelli, Owen, Morris, and FAST types make the
+  expected sampling layout explicit; `ProblemBuilder` validates input parameters.
+- **Bit-reproducibility:** identical inputs and `RngState` produce identical bits
+  across thread counts for the same binary and platform, with a reproducible model.
+- **Verification:** analytic references, metamorphic oracles, bounded Kani proofs,
+  and Stateright state exploration check different classes of implementation errors.
+
+Choose Python SALib when its Python ecosystem suits your workflow. salib offers
+similar method families with Rust APIs; it does not promise identical Python
+samples or numerical results.
 
 ## Quickstart
 
+Estimate which of three independent inputs explains the Ishigami model’s output
+variance. The third input matters only through an interaction, making it a useful
+example of why both first-order (`S1`) and total-effect (`ST`) indices matter.
+
 ```toml
-# Cargo.toml
 [dependencies]
 salib = "0.2"
 ```
 
 ```rust
 use std::f64::consts::PI;
-use salib::*;
-use salib::samplers::{SobolSampler, build_saltelli_matrix};
+use salib::{Distribution, ProblemBuilder, RngState};
+use salib::samplers::{build_saltelli_matrix, SobolSampler};
 use salib::estimators::estimate_saltelli2010;
 
-fn main() {
-    // 1. Define the problem: 3 factors, Uniform(-pi, pi)
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let problem = ProblemBuilder::new()
         .factor("x1", Distribution::Uniform { lo: -PI, hi: PI })
         .factor("x2", Distribution::Uniform { lo: -PI, hi: PI })
         .factor("x3", Distribution::Uniform { lo: -PI, hi: PI })
-        .build()
-        .unwrap();
+        .build()?;
 
-    // 2. Build a Saltelli sample matrix (N=8192 base samples, 3 factors → 6-dim sampler)
-    let mut rng = RngState::from_seed([0u8; 32]);
+    let mut rng = RngState::from_seed([0; 32]);
     let sampler = SobolSampler::minimal(2 * problem.dim());
-    let saltelli = build_saltelli_matrix(&sampler, 8192, false, &mut rng).unwrap();
+    let design = build_saltelli_matrix(&sampler, 8192, false, &mut rng)?;
 
-    // 3. Estimate Sobol' indices — the estimator calls the model internally
-    //    Ishigami: y = sin(x1) + 7*sin(x2)^2 + 0.1*x3^4*sin(x1)
-    let indices = estimate_saltelli2010(&saltelli, |x| {
-        x[0].sin() + 7.0 * x[1].sin().powi(2) + 0.1 * x[2].powi(4) * x[0].sin()
-    });
-
-    // 4. Print results
-    for (i, f) in problem.factors().iter().enumerate() {
-        println!("{}: S1 = {:.4}, ST = {:.4}", f.name, indices.first_order[i], indices.total_order[i]);
+    // Designs contain unit-cube coordinates; map them to physical inputs.
+    let model = |u: &[f64]| {
+        let x: Vec<f64> = problem.factors().iter().zip(u)
+            .map(|(factor, &ui)| factor.distribution.quantile(ui))
+            .collect();
+        x[0].sin() + 7.0 * x[1].sin().powi(2)
+            + 0.1 * x[2].powi(4) * x[0].sin()
+    };
+    let indices = estimate_saltelli2010(&design, model);
+    for (i, factor) in problem.factors().iter().enumerate() {
+        println!("{}: S1 = {:.4}, ST = {:.4}",
+            factor.name, indices.first_order[i], indices.total_order[i]);
     }
+    Ok(())
 }
 ```
 
-## Crate structure
+The sampler needs six columns to construct two three-factor base matrices.
+`8192` is the base sample size: this design requires 40,960 model evaluations.
+`false` skips the additional matrices for pairwise indices. The estimator calls
+the closure with unit-cube rows; the closure applies each factor’s inverse CDF.
 
-`salib` is a facade that re-exports subcrates. Use it for convenience, or
-depend on individual crates for finer control.
+Expect `S1` near `[0.314, 0.442, 0.000]` and `ST` near
+`[0.558, 0.442, 0.244]`. Thus `x3` contributes through interactions despite its
+zero main effect. See the [step-by-step tutorial](docs/quickstart.md) for
+interpretation, sampler alternatives, and bootstrap intervals.
 
-| Crate | Contents |
+## Crates and features
+
+Most applications should depend on the `salib` facade. Its defaults enable
+`samplers`, `estimators`, and `parallel`. Depend on individual crates when you
+need their API directly:
+
+| Crate | Use it for |
 |---|---|
-| `salib-core` | `Problem`, `Factor`, `Distribution`, `RngState`, bit-reproducible reductions |
-| `salib-samplers` | LHS, Sobol' QMC, Halton, Saltelli (A/B/A\_Bi), Morris trajectories, FAST/eFAST/RBD-FAST designs |
-| `salib-estimators` | Variance-based Sobol' (Saltelli2010, Jansen, Janon, Owen), Morris EE, FAST/eFAST, RBD-FAST, Borgonovo delta, PAWN, DGSM, regression (SRC/SRRC/PCC/PRCC), given-data Sobol', ANOVA, HDMR, G-theory, fractional factorial, discrepancy |
-| `salib-surrogate` | PCE (full + sparse LARS), active subspaces |
-| `salib-shapley` | Shapley effects (Song-Nelson-Staum 2016) |
-| `salib-validation` | Analytic test functions (Ishigami, Sobol' G, etc.) with closed-form indices |
-| `salib-cli` | CLI binary: `sample`, `run`, `analyze` subcommands |
+| [salib-core](crates/salib-core/README.md) | Problems, distributions, RNG state, bit-reproducible reductions |
+| [salib-samplers](crates/salib-samplers/README.md) | Sampling designs to evaluate in your own pipeline |
+| [salib-estimators](crates/salib-estimators/README.md) | Sensitivity estimates from designs or cached data |
+| [salib-surrogate](crates/salib-surrogate/README.md) | Full/sparse PCE and active subspaces (`surrogate` feature) |
+| [salib-shapley](crates/salib-shapley/README.md) | Shapley variance attribution for independent inputs (`shapley`) |
+| [salib-validation](crates/salib-validation/README.md) | Analytic reference models (`validation`) |
+| [salib-cli](crates/salib-cli/README.md) | Reserved CLI package; commands are not implemented yet |
 
-## Feature flags
+These seven packages plus the facade make eight release crates.
+`salib-models` is an additional, unpublished verification crate.
+`full` enables all analysis families; `serde`, `arrow`, and `polars` are separate
+interop features. See the [crate map](docs/crates.md) for dependency details.
 
-```toml
-[features]
-default = ["samplers", "estimators"]
-samplers   = ["dep:salib-samplers"]
-estimators = ["dep:salib-estimators"]
-surrogate  = ["dep:salib-surrogate"]
-shapley    = ["dep:salib-shapley"]
-validation = ["dep:salib-validation"]
-full       = ["samplers", "estimators", "surrogate", "shapley", "validation"]
-```
+[Documentation hub](docs/index.md) · [Method selection](docs/choosing.md) ·
+[API reference](https://docs.rs/salib/latest/salib/) ·
+[Bit-reproducibility contract](docs/internals.md)
 
 ## Testing
 
@@ -102,14 +127,19 @@ interaction terms should vanish. These relations require no ground truth:
 they are properties of the math itself, verified against the code's own
 outputs.
 
+The suite includes 28 metamorphic oracles. Bounded Kani verification found
+four bugs that now have fixes and regression tests; four Stateright models
+check problem construction, RNG use, Saltelli assembly, and estimator
+completeness. These checks cover specific invariants, not a proof of every
+estimator’s statistical correctness. The former TCK has been retired.
+
 On top of that, structural tests pin down the sampling machinery — LHS
 stratification, Sobol' canonical sequences, Saltelli matrix construction —
 and bit-reproducibility tests confirm that the same seed produces the same
 bits regardless of thread count.
 
-Run the full suite with `cargo test --workspace` (about a minute for 917
-tests). During development, scope your runs: `cargo test -p salib-estimators
-<pattern>` touches only what you're working on.
+Run the full suite with `cargo test --workspace`. During development,
+`cargo test -p salib-estimators <pattern>` scopes the run to the relevant estimator.
 
 The testing strategy lives in `docs/test-modernization-plan.md`. Deeper
 analyses — every metamorphic relation, float hazard, formal verification
@@ -118,9 +148,8 @@ target, and type-level constraint opportunity — are catalogued in
 
 ## Requirements
 
-- Edition 2021
-- MSRV 1.87
+Rust 1.87 or later; edition 2021.
 
 ## License
 
-Licensed under MIT OR Apache-2.0, at your option.
+MIT OR Apache-2.0, at your option.

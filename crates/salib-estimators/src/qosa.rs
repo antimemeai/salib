@@ -41,14 +41,14 @@
 //! sample estimator (Eq 4.3) using `F_Y^{-1}(α)` and a kernel-
 //! conditional-quantile `F_{Y|X_i=x}^{-1}(α)`. This module ships a
 //! **partition-based** alternative that fits the existing saltelli
-//! given-data machinery (PR 11 [`borgonovo`], PR 14b
-//! [`given_data_sobol`]):
+//! given-data machinery (PR 11 [`crate::borgonovo`], PR 14b
+//! [`crate::given_data_sobol`]):
 //!
 //! 1. Sort `Y` and take `θ̂* = ⌈α·N⌉`-th value (empirical α-quantile).
 //! 2. Compute global `Ȳ` and `CTE_α(Y) = (1/(N(1−α))) Σⱼ Yⱼ · 1_{Yⱼ > θ̂*}`.
 //! 3. For each factor `i`:
 //!    a. Partition `X_i` into `K` ordinal classes (same heuristic as
-//!       [`borgonovo::class_count`]).
+//!       `borgonovo::class_count`).
 //!    b. For each class, take the conditional α-quantile θ̂_class.
 //!    c. Compute `Ê[Y | Y > F_{Y|X_i}^{-1}(α)] ≈
 //!       (1/(N(1−α))) Σⱼ Yⱼ · 1_{Yⱼ > θ̂_class(j)}` where
@@ -159,16 +159,33 @@ impl fmt::Display for QosaIndices {
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum QosaError {
+    /// Input and output shapes are incompatible.
     #[error("qosa: shape mismatch — x has {x_rows} rows, y has {y_len} elements")]
-    ShapeMismatch { x_rows: usize, y_len: usize },
+    ShapeMismatch {
+        /// Number of rows in the input matrix.
+        x_rows: usize,
+        /// Number of output observations.
+        y_len: usize,
+    },
+    /// At least one input dimension is required.
     #[error("qosa: d must be ≥ 1, got 0")]
     ZeroD,
+    /// The sample count is too small for the requested analysis.
     #[error("qosa: insufficient samples — need N ≥ 16, got {n}")]
-    InsufficientSamples { n: usize },
+    InsufficientSamples {
+        /// Sample count supplied by the caller.
+        n: usize,
+    },
+    /// The significance or quantile level must be finite and strictly between zero and one.
     #[error("qosa: alpha must lie in (0, 1), got {alpha}")]
-    InvalidAlpha { alpha: f64 },
+    InvalidAlpha {
+        /// Significance or quantile level supplied; must be finite and in `(0,1)`.
+        alpha: f64,
+    },
+    /// Output variance is zero or below the estimator threshold.
     #[error("qosa: Var(Y) ≈ 0 (model output is constant)")]
     ZeroVariance,
+    /// The quantile contrast has no informative tail contribution.
     #[error(
         "qosa: degenerate tail — CTE_α(Y) ≈ E[Y]; either α is too \
          small or Y has a heavy point mass below the α-quantile"

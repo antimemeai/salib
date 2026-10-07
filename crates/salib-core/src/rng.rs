@@ -1,49 +1,11 @@
-//! `RngState` — multi-stream `ChaCha20` with deterministic salt-derived
-//! forking. The replay-determinism foundation for every salib sampler
-//! and estimator.
+//! Serializable ChaCha20 state and reproducible named stream derivation.
 //!
-//! # The state
-//!
-//! Four fields:
-//! - `algorithm`: closed enum, `ChaCha20` only today (future
-//!   `Pcg64` / `Xoshiro256pp` behind a `fast-rng` feature).
-//! - `seed: [u8; 32]`: 256-bit seed.
-//! - `stream: u64`: 2⁶⁴ independent streams per seed (`ChaCha20Rng::set_stream`).
-//! - `word_pos: u128`: position within the stream
-//!   (`ChaCha20Rng::get_word_pos` / `set_word_pos`); enables mid-flight
-//!   snapshot + resumption.
-//!
-//! Recording all four lets a verifier reconstruct any SA campaign's
-//! RNG stream from scratch.
-//!
-//! # Forking
-//!
-//! [`RngState::fork`] derives a child stream from a salt:
-//!
-//! ```text
-//! child.stream   = parent.stream XOR u64::from_le_bytes(SHA-256(parent.stream || salt)[..8])
-//! child.word_pos = 0
-//! child.seed     = parent.seed
-//! ```
-//!
-//! Pure function of `(parent.stream, salt)` and the parent's seed —
-//! `parent.fork(b"block-7")` always yields the same child regardless
-//! of process, machine, rayon thread count, or wall-clock time. This
-//! is what makes parallel sampling deterministic: rayon workers fork
-//! by block index, the resulting per-block streams are stable across
-//! runs, and the sample matrix is bit-identical regardless of how
-//! work was distributed.
-//!
-//! Why XOR-with-mix instead of replace-with-mix: the child's stream
-//! depends on *both* `parent.stream` and `salt`, not just `salt`. Two
-//! distinct parents that happen to fork with the same salt produce
-//! distinct children — important for nested forking patterns where
-//! the same salt vocabulary recurs at multiple levels.
-//!
-//! Why SHA-256 and not Blake3: SHA-256 is indistinguishable from
-//! Blake3 at this small input size (well under 64 bytes). Blake3
-//! lands in a later PR when there is a tree-mode-parallel-hashing
-//! use case (e.g. content-addressing a 10⁶-row sample matrix).
+//! Record the seed, stream, and word position to resume a stochastic draw.
+//! [`RngState::fork`] derives a child from the seed, parent stream, and salt;
+//! the child starts at word position zero and the parent is unchanged.
+//! Parent word position is not used to derive the child. Assign stable salts
+//! to jobs before scheduling them to make stream assignment reproducible.
+//! Hash-derived stream IDs are not a proof of collision-free independence.
 
 use rand_chacha::rand_core::SeedableRng;
 use rand_chacha::ChaCha20Rng;
@@ -66,9 +28,13 @@ pub enum RngAlgorithm {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct RngState {
+    /// Random-number algorithm used to interpret this state.
     pub algorithm: RngAlgorithm,
+    /// Original 256-bit seed.
     pub seed: [u8; 32],
+    /// ChaCha20 stream identifier.
     pub stream: u64,
+    /// Position in the stream, measured in 32-bit words.
     pub word_pos: u128,
 }
 
@@ -104,6 +70,20 @@ impl RngState {
     ///
     /// Pure function of `(parent.stream, parent.seed, salt)`. Same
     /// inputs always produce equal outputs.
+    ///
+    /// Does not advance the parent. The parent word position is not part of stream
+    /// derivation; reuse of the same salt and parent stream repeats the child stream.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use salib_core::RngState;
+    /// let parent = RngState::from_seed([7; 32]);
+    /// let child = parent.fork(b"bootstrap");
+    /// assert_eq!(child, parent.fork(b"bootstrap"));
+    /// assert_eq!(child.word_pos, 0);
+    /// assert_eq!(parent.word_pos, 0);
+    /// ```
     #[must_use]
     pub fn fork(&self, salt: &[u8]) -> Self {
         let mut hasher = Sha256::new();

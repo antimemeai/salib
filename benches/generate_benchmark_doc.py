@@ -8,6 +8,7 @@ Writes: docs/benchmarks.md
 All numbers flow from data. No manual entry.
 """
 
+import argparse
 import json
 import os
 
@@ -55,20 +56,41 @@ SAMPLING = [
 
 
 def main():
+    global CRITERION_BASE
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--criterion-dir", default=CRITERION_BASE)
+    parser.add_argument("--run-date", default="not recorded")
+    parser.add_argument("--revision", default="not recorded")
+    parser.add_argument("--platform", default="not recorded")
+    parser.add_argument("--rustc", default="not recorded")
+    parser.add_argument("--sample-size", type=int, default=100)
+    parser.add_argument("--warm-up-time", type=float, default=3.0)
+    parser.add_argument("--measurement-time", type=float, default=5.0)
+    args = parser.parse_args()
+    CRITERION_BASE = args.criterion_dir
+    # Missing results must not silently replace the document with partial tables.
+    missing = [f"{group}/{n}" for _, group, ns, *_ in METHODS + SAMPLING
+               for n in ns if load_rust_median(group, n) is None]
+    if missing:
+        raise SystemExit("Missing Criterion results: " + ", ".join(missing))
     lines = []
     w = lines.append
 
     w("# Benchmarks")
     w("")
-    w("Criterion benchmarks for every analysis method on the Ishigami function ($d = 3$), plus sampling.")
+    w("Current measurements for the subset of methods in [the harness](../benches/sensitivity.rs), plus sampling. This is a timing comparison, not an estimator accuracy test.")
     w("")
     w("## Methodology")
     w("")
-    w("[Criterion](https://github.com/bheisler/criterion.rs) 0.5, 100 samples per benchmark, automatic warmup. Statistic: **median**. Machine: Apple Silicon.")
+    w(f"Measured on **{args.run_date}**, source revision `{args.revision}` (documentation changes do not alter benchmark algorithms). Platform: {args.platform}; compiler: `{args.rustc}`.")
     w("")
-    w("**Test function:** Ishigami $f(x) = \\sin(x_1) + 7\\sin^2(x_2) + 0.1 x_3^4 \\sin(x_1)$ with $x_i \\in [-\\pi, \\pi]$.")
+    w(f"[Criterion](https://github.com/bheisler/criterion.rs) 0.5; {args.sample_size} samples per benchmark; {args.warm_up_time:g} s warmup and {args.measurement_time:g} s requested measurement time. Statistic: **median** of Criterion's per-iteration timing estimates.")
     w("")
-    w("**What is timed:** Methods marked [fn] evaluate the model function inside the timed loop (sampling + analysis are interleaved in the estimator). All other methods take pre-computed $(X, Y)$ and time the analysis step only.")
+    w("These local release-build measurements are for orientation. The requested window is short; Criterion extends collection when 100 samples need longer and reports outliers. They are not precise cross-machine performance claims. Repeat with longer windows on your target hardware; concurrent processes and thermal state affect timing.")
+    w("")
+    w("**Workload:** the Ishigami formula with three inputs. The current harness feeds unit-cube samples directly, so this is **not** canonical Ishigami on `[-pi,pi]`. Sobol\' G uses eight unit-cube inputs. These timings do not establish convergence to canonical analytic indices.")
+    w("")
+    w("**What is timed:** [fn] methods include model evaluation and estimation on a prebuilt design; sampling is outside their timed loops. Given-data methods time analysis of precomputed inputs/outputs. DGSM excludes gradient acquisition and output-variance computation. Sampling rows time design construction separately.")
     w("")
 
     # ── Analysis benchmarks ──
@@ -85,7 +107,7 @@ def main():
             w(f"| {doc_name}{tag} | {n} | {fmt_time(rust_ns)} |")
     w("")
 
-    w("**[fn]** = benchmark includes Ishigami evaluation inside the timed loop. For these methods, the reported time is analysis + function evaluation. Ishigami is trivial (~3 ns/eval); for expensive models, function evaluation dominates and the analysis overhead shown here becomes negligible.")
+    w("**[fn]** includes model calls. Ishigami is a small arithmetic model; simulator or service latency can dominate in an application. No Python SALib speedup is inferred from these measurements.")
     w("")
 
     # ── Morris note ──
@@ -107,23 +129,28 @@ def main():
             w(f"| {doc_name} | {n} | {fmt_time(rust_ns)} |")
     w("")
 
-    w("Saltelli $N$ is base sample size; the matrix has $N \\times (d + 2)$ rows. Morris $N$ is trajectory count.")
+    w("Saltelli $N$ is rows per base matrix: the bundle requires $N(d+2)$ evaluations and contains separate base/hybrid arrays, not a single stacked matrix. Morris $N$ is trajectory count.")
     w("")
 
     # ── Reproducing ──
     w("## Reproducing")
     w("")
     w("```bash")
-    w("cargo bench --manifest-path crates/salib/Cargo.toml")
+    w(f'CRITERION_HOME="$PWD/target/criterion" cargo bench -p salib --bench sensitivity -- --sample-size {args.sample_size} --warm-up-time {args.warm_up_time:g} --measurement-time {args.measurement_time:g}')
     w("")
-    w("# Regenerate this document from Criterion results")
-    w("python benches/generate_benchmark_doc.py")
+    w("# CRITERION_HOME keeps generated artifacts in the ignored workspace target directory.")
+    w("# Regenerate from those results; use --criterion-dir for a custom output location.")
+    w("python3 benches/generate_benchmark_doc.py "
+      f"--run-date '{args.run_date}' --revision '{args.revision}' "
+      f"--platform '{args.platform}' --rustc '{args.rustc}' "
+      f"--sample-size {args.sample_size} --warm-up-time {args.warm_up_time:g} "
+      f"--measurement-time {args.measurement_time:g}")
     w("```")
     w("")
 
     doc = "\n".join(lines)
     with open(OUTPUT, "w") as f:
-        f.write(doc)
+        f.write(doc.rstrip() + "\n")
     print(f"Wrote {OUTPUT}")
     print(f"  {len(lines)} lines")
 

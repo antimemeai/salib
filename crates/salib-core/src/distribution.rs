@@ -1,49 +1,10 @@
-//! `Distribution` — closed enum of factor distributions, with
-//! inverse-CDF (`quantile`) and support boundaries as the unified
-//! extension point.
+//! Marginal input distributions and inverse-CDF mapping.
 //!
-//! # Why a closed enum, not a `dyn Distribution` trait
-//!
-//! and matching
-//!  verbatim
-//! — the distribution set is closed and `Serialize + Deserialize`.
-//! The ledger entry is a JSON dump of `Problem`, byte-comparable
-//! across runs. A trait-object distribution would break that
-//! provenance property.
-//!
-//! Custom / exotic distributions plug in *on the model side* by
-//! composing inverse CDFs over `Uniform { 0, 1 }` — the same trick
-//! `SALib` uses. `Empirical { quantiles }` and `Truncated` are
-//! `#[non_exhaustive]` extensions that land in follow-on PRs (each
-//! has its own design questions: interpolation policy for
-//! `Empirical`, truncation discipline for `Truncated`).
-//!
-//! # The `quantile` contract
-//!
-//! `quantile(u: f64) -> f64` for `u ∈ [0, 1]`. Out-of-range `u` is
-//! saturated to `[0, 1]`, giving well-defined behavior at the
-//! support boundaries. This is the only direction samplers consume —
-//! they produce uniform `[0, 1)` samples and call `quantile` per
-//! factor. The reverse direction (`cdf`) is needed for `Truncated`
-//! and for future moment-independent estimators; lands in the
-//! follow-on PR that introduces `Truncated`.
-//!
-//! # Closed-form vs `statrs`
-//!
-//! - Closed-form (this file): Uniform, Triangular, Weibull,
-//!   Exponential, Bernoulli, `DiscreteUniform`.
-//! - `statrs` Newton-converged inverse CDF: Normal, `LogNormal`, Beta,
-//!   Gamma. These have no useful closed-form quantile.
-//!
-//! # Determinism
-//!
-//! Every quantile is a pure function of `(parameters, u)`. No RNG,
-//! no clock, no env. Cross-platform-byte-exact under the no-FMA
-//! reference build (`cargo xtask reference-ci`) — `statrs`'s
-//! Newton iterations are convergence-tolerant, not bit-stable across
-//! FMA-on vs FMA-off builds. This is documented in
-//!  § "Threat
-//! model" as a known property of the inverse-CDF path.
+//! [`Distribution::quantile`] transforms a unit coordinate into a physical
+//! input value. [`crate::ProblemBuilder`] validates distribution parameters;
+//! enum variants can also be constructed directly, so standalone values still
+//! require valid parameters. Quantiles are pure functions of parameters and
+//! coordinates. No cross-platform or cross-version bit identity is promised.
 
 use serde::{Deserialize, Serialize};
 use statrs::distribution::{
@@ -51,33 +12,60 @@ use statrs::distribution::{
     Normal as NormalDist,
 };
 
-/// Factor distributions saltelli supports. Closed enum,
-/// `#[non_exhaustive]`. Future variants (`Truncated`, `Empirical`,
-/// `Categorical`, …) land non-breaking via follow-on ADRs.
+/// Marginal input distributions with inverse-CDF mapping.
+///
+/// Validate parameters through [`crate::ProblemBuilder`] before evaluating
+/// quantiles. This public enum can also hold unchecked parameter values.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 #[serde(tag = "kind")]
 pub enum Distribution {
     /// Uniform on `[lo, hi]`. Closed-form quantile.
-    Uniform { lo: f64, hi: f64 },
+    Uniform {
+        /// Lower support bound (inclusive).
+        lo: f64,
+        /// Upper support bound (inclusive).
+        hi: f64,
+    },
 
     /// Normal `N(mu, sigma²)`. `statrs::Normal::inverse_cdf`.
-    Normal { mu: f64, sigma: f64 },
+    Normal {
+        /// Mean of the normal distribution.
+        mu: f64,
+        /// Positive standard deviation.
+        sigma: f64,
+    },
 
     /// Log-normal — `exp(N(mu_log, sigma_log²))`.
     /// `statrs::LogNormal::inverse_cdf`.
-    LogNormal { mu_log: f64, sigma_log: f64 },
+    LogNormal {
+        /// Mean of the underlying normal distribution of log values.
+        mu_log: f64,
+        /// Positive standard deviation of log values.
+        sigma_log: f64,
+    },
 
     /// Triangular on `[lo, hi]` with mode `mode`. Closed-form
     /// quantile (piecewise sqrt).
-    Triangular { lo: f64, mode: f64, hi: f64 },
+    Triangular {
+        /// Lower support bound (inclusive).
+        lo: f64,
+        /// Location of the triangular density peak, between the support bounds.
+        mode: f64,
+        /// Upper support bound (inclusive).
+        hi: f64,
+    },
 
     /// Beta on `[lo, hi]` with shape parameters `alpha`, `beta`.
     /// `statrs::Beta::inverse_cdf` then affine-mapped to `[lo, hi]`.
     Beta {
+        /// Positive first shape parameter.
         alpha: f64,
+        /// Positive second shape parameter.
         beta: f64,
+        /// Lower support bound (inclusive).
         lo: f64,
+        /// Upper support bound (inclusive).
         hi: f64,
     },
 
@@ -85,33 +73,45 @@ pub enum Distribution {
     /// shape × scale). `statrs::Gamma` parameterizes by rate, so
     /// we pass `1/scale`. Closed-form for shape = 1 collapses to
     /// `Exponential { lambda: 1/scale }`.
-    Gamma { shape: f64, scale: f64 },
+    Gamma {
+        /// Positive shape parameter.
+        shape: f64,
+        /// Positive scale parameter.
+        scale: f64,
+    },
 
     /// Weibull with shape `shape`, scale `scale`. Closed-form
     /// quantile: `scale * (-ln(1 - u))^(1/shape)`.
-    Weibull { shape: f64, scale: f64 },
+    Weibull {
+        /// Positive shape parameter.
+        shape: f64,
+        /// Positive scale parameter.
+        scale: f64,
+    },
 
     /// Exponential with rate `lambda`. Closed-form quantile:
     /// `-ln(1 - u) / lambda`.
-    Exponential { lambda: f64 },
+    Exponential {
+        /// Positive rate parameter (inverse scale).
+        lambda: f64,
+    },
 
     /// Bernoulli with success probability `p`. Quantile: 0 if
     /// `u < 1 - p`, else 1.
     /// [`crate::ProblemBuilder`] requires `0 < p < 1`.
-    Bernoulli { p: f64 },
+    Bernoulli {
+        /// Success probability, strictly between zero and one in a validated problem.
+        p: f64,
+    },
 
     /// Discrete uniform on the inclusive integer range `[lo, hi]`.
-    DiscreteUniform { lo: i64, hi: i64 },
+    DiscreteUniform {
+        /// Lower support bound (inclusive).
+        lo: i64,
+        /// Upper support bound (inclusive).
+        hi: i64,
+    },
 }
-
-// `statrs`'s `Beta::new` etc. return `Result`; the `quantile` impls
-// below panic on invalid params via debug-style assertions. This is
-// safe because `ProblemBuilder::build` validates parameters at
-// `Problem` construction time (),
-// so a `Distribution` value reachable from a built `Problem` cannot
-// have bad params. A future fallible `Distribution::checked_quantile`
-// lands when a public `Distribution` constructor surface is needed
-// (none today).
 
 impl Distribution {
     /// Inverse CDF. `u ∈ [0, 1]` (saturated; out-of-range inputs
@@ -124,6 +124,18 @@ impl Distribution {
     /// `Beta` with `lo ≥ hi`, etc.). `Problem` construction validates
     /// parameters at build time so this never fires for a Problem
     /// produced by `ProblemBuilder::build`.
+    ///
+    /// A sampler supplies unit coordinates. Apply one quantile per factor before
+    /// evaluating a model in physical units. Unbounded distributions can return
+    /// infinity at endpoints; choose a sampling/endpoint policy appropriate to the model.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use salib_core::Distribution;
+    /// let range = Distribution::Uniform { lo: -2.0, hi: 2.0 };
+    /// assert_eq!(range.quantile(0.25), -1.0);
+    /// ```
     #[must_use]
     pub fn quantile(&self, u: f64) -> f64 {
         let u = u.clamp(0.0, 1.0);

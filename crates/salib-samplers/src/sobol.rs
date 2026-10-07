@@ -35,13 +35,14 @@
 //! BSD-3-Clause attribution in `data/LICENSE.joe-kuo`. Per
 //!
 //!
-//! # Skip-first
+//! # Origin and replay
 //!
-//! Sobol' point 0 is exactly the origin `(0, 0, …, 0)`. Owen 2020
-//! ("On dropping the first Sobol' point") recommends skipping it
-//! because the all-zeros origin biases convergence at small N.
-//! Default `skip_first = true`. Set `false` for `SALib`-compat
-//! comparisons (older `SALib` versions include the origin).
+//! Point zero is the all-zero origin. Constructors default to skipping it;
+//! [`SobolSampler::with_skip_first`] can retain it. Skipping is an implementation
+//! default, not an accuracy recommendation: [Owen (2020)](https://arxiv.org/abs/2008.08051)
+//! shows that dropping the first point can impair digital-net balance.
+//! This sampler is unscrambled, restarts on each call, and does not consume RNG
+//! state. Changing the seed does not generate independent QMC replicates.
 
 use ndarray::Array2;
 use salib_core::RngState;
@@ -113,14 +114,14 @@ pub struct SobolSampler {
     pub dim: usize,
     /// Which vendored Joe-Kuo dim table to use.
     pub dim_set: SobolDimSet,
-    /// Drop the all-zeros origin point. Owen 2020 default = `true`;
+    /// Drop the all-zeros origin point. The constructor default is `true`;
     /// set `false` for older `SALib`-compat behavior.
     pub skip_first: bool,
 }
 
 impl SobolSampler {
     /// Standard Sobol' (1000-dim Joe-Kuo table) with skip-first
-    /// enabled per Owen 2020.
+    /// enabled.
     ///
     /// # Panics
     ///
@@ -157,7 +158,10 @@ impl SobolSampler {
         }
     }
 
-    /// Toggle skip-first.
+    /// Toggle whether to omit the all-zero origin.
+    ///
+    /// Retaining the origin preserves the initial digital net at power-of-two
+    /// sizes, but unbounded inverse CDFs need an endpoint policy. See module docs.
     #[must_use]
     pub fn with_skip_first(mut self, skip_first: bool) -> Self {
         self.skip_first = skip_first;

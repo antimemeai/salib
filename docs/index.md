@@ -1,16 +1,34 @@
 # salib
 
 Global sensitivity analysis for Rust, implemented from the primary literature.
-Bit-reproducible: same seed, same results, regardless of thread count.
+Bit-reproducible: same inputs and RNG state, same bits across thread counts on the same binary and platform.
 
 [crates.io](https://crates.io/crates/salib) · [API reference](https://docs.rs/salib) · [source](https://github.com/antimeme-ai/salib)
 
 ---
 
-## Start here
+## Reading order
 
-- **[Quickstart](quickstart.md)** — Ishigami function, Saltelli sampling, Sobol' indices. Five minutes.
-- **[Choosing a method](choosing.md)** — which estimator for which question.
+1. **[Quickstart](quickstart.md):** define inputs, generate a Saltelli design,
+   map distributions, evaluate Ishigami, and interpret Sobol' indices and intervals.
+2. **[Choosing a method](choosing.md):** match the question, data, and evaluation
+   budget to an estimator; distinguish screening from quantitative attribution.
+3. **Method guides below:** equations, assumptions, code, and paper references
+   for each family. Start with [variance-based methods](methods/variance-based.md)
+   if you are following the tutorial.
+4. **[Crate map](crates.md) → [API reference](https://docs.rs/salib/latest/salib/):**
+   select dependencies and features, then check exact signatures, errors, and
+   runnable examples. Generate local API docs with
+   `cargo doc --workspace --no-deps` for the checked-out revision.
+5. **[Internals](internals.md):** reduction order, RNG replay, the rayon contract,
+   and the scope of verification. Read this when integrating parallel model runs.
+
+The [bibliography](bibliography.md) collects primary references; the
+[benchmarks](benchmarks.md) explain timing scope and how to reproduce measurements.
+API documentation for the three main building blocks:
+[salib-core](https://docs.rs/salib-core/latest/salib_core/),
+[salib-samplers](https://docs.rs/salib-samplers/latest/salib_samplers/), and
+[salib-estimators](https://docs.rs/salib-estimators/latest/salib_estimators/).
 
 ## Methods
 
@@ -22,7 +40,7 @@ The workhorse of global SA.
 - [Saltelli 2010](methods/variance-based.md#saltelli-2010) — improved estimator for first-order and total-effect indices. The default choice.
 - [Jansen 1999](methods/variance-based.md#jansen-1999) — total-effect estimator with better convergence for small samples.
 - [Janon 2014](methods/variance-based.md#janon-2014) — asymptotically efficient first-order estimator.
-- [Owen 2013](methods/variance-based.md#owen-2013) — three-matrix design for improved second-order estimates.
+- [Owen 2013](methods/variance-based.md#owen-2013) — three-matrix design for small first-order indices.
 - [Given-data Sobol'](methods/variance-based.md#given-data-sobol) — Sobol' indices from observational data without designed experiments. Plischke et al. 2013.
 
 ### Elementary effects
@@ -76,6 +94,6 @@ Build a cheap approximation, extract indices analytically.
 
 ## Reference
 
-- **[Bibliography](bibliography.md)** — annotated references for every method.
+- **[Bibliography](bibliography.md)** — primary references for the implemented methods.
 - **[Internals](internals.md)** — bit-reproducibility, tree-structured reductions, the rayon contract.
 - **[Crate map](crates.md)** — which crate owns what, dependency graph, feature flags.

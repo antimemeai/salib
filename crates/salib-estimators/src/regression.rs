@@ -36,7 +36,7 @@
 //! and deriving partial correlations from the inverse —
 //! eligible if a workload pushes `d` past ~50.
 //!
-//! # Determinism
+//! # Bit-reproducibility
 //!
 //! Pure under `(X, Y)`. OLS via normal equations + Cholesky
 //! solve (`nalgebra`). Stable rank with `partial_cmp(...)
@@ -124,14 +124,28 @@ impl fmt::Display for RegressionIndices {
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum RegressionError {
+    /// Input and output shapes are incompatible.
     #[error("regression: shape mismatch — X has {x_rows} rows, y has {y_len} elements")]
-    ShapeMismatch { x_rows: usize, y_len: usize },
+    ShapeMismatch {
+        /// Number of rows in the input matrix.
+        x_rows: usize,
+        /// Number of output observations.
+        y_len: usize,
+    },
+    /// At least one input dimension is required.
     #[error("regression: d must be ≥ 1, got 0")]
     ZeroD,
     /// Need at least `d + 2` samples to fit `d` regression
     /// coefficients + intercept and have ≥ 1 residual DOF.
     #[error("regression: N must be ≥ d + 2 (got N={n}, d={d}, minimum={minimum})")]
-    InsufficientSamples { n: usize, d: usize, minimum: usize },
+    InsufficientSamples {
+        /// Sample count supplied by the caller.
+        n: usize,
+        /// Number of input factors.
+        d: usize,
+        /// Minimum sample count required by this configuration.
+        minimum: usize,
+    },
     /// Total variance of `Y` is zero — model is constant; no
     /// regression signal to recover.
     #[error("regression: Var(Y) is zero (model output is constant)")]
@@ -139,7 +153,10 @@ pub enum RegressionError {
     /// Total variance of `Xᵢ` is zero for some factor — design
     /// matrix is rank-deficient.
     #[error("regression: Var(X[:, {factor}]) is zero — design matrix rank-deficient")]
-    ZeroFactorVariance { factor: usize },
+    ZeroFactorVariance {
+        /// Zero-based factor index that failed validation.
+        factor: usize,
+    },
     /// `(XᵀX)` is singular — design matrix is rank-deficient
     /// despite per-factor variance checks. Possible collinearity.
     #[error("regression: design matrix XᵀX is singular (factor collinearity?)")]

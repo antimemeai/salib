@@ -1,6 +1,8 @@
 # Crate Map
 
-salib is a workspace of eight crates. The `salib` facade re-exports the most common types and functions; depend on individual crates for finer control over compile times and dependencies.
+salib has eight release crates plus the unpublished `salib-models` verification crate. The `salib` facade re-exports the most common types and functions; depend on individual crates for finer control over compile times and dependencies.
+Their READMEs give direct-dependency examples. Feature flags control exposed APIs;
+transitive dependencies can still include crates behind a disabled facade feature.
 
 ---
 
@@ -8,21 +10,20 @@ salib is a workspace of eight crates. The `salib` facade re-exports the most com
 
 ```
 salib  (facade)
-├── salib-core           types, distributions, RngState, deterministic reductions
+├── salib-core           types, distributions, RngState, bit-reproducible reductions
 ├── salib-samplers       sampling designs (LHS, Sobol', Saltelli, Morris, FAST)
 │   └── salib-core
 ├── salib-estimators     all sensitivity estimators
 │   ├── salib-core
 │   └── salib-samplers
-├── salib-surrogate      PCE, HDMR, active subspaces  [optional: "surrogate"]
+├── salib-surrogate      PCE, active subspaces        [optional: "surrogate"]
 │   └── salib-core
 ├── salib-shapley        Shapley effects              [optional: "shapley"]
-│   ├── salib-core
-│   ├── salib-samplers
-│   └── salib-estimators
-├── salib-validation     test functions (Ishigami, Sobol' G, Morris)  [optional: "validation"]
 │   └── salib-core
-└── salib-cli            CLI binary                    [separate install]
+└── salib-validation     test functions (Ishigami, Sobol' G, Morris)  [optional: "validation"]
+│   └── salib-core
+│
+salib-cli               CLI stub                      [separate package]
     ├── salib-core
     ├── salib-samplers
     └── salib-estimators
@@ -40,7 +41,7 @@ Types that everything else depends on.
 | `ProblemBuilder` | Fluent builder for `Problem` |
 | `Factor` | Name + distribution for one input |
 | `Distribution` | `Uniform`, `Normal`, `LogNormal`, `Triangular`, `Beta` |
-| `RngState` | Deterministic ChaCha20 RNG with `split()` for parallelism |
+| `RngState` | Serializable ChaCha20 RNG with `fork(salt)` for named streams |
 | `tree_sum`, `tree_dot`, `tree_var` | Binary-tree accumulation for bit-reproducible parallel sums |
 
 ### salib-samplers
@@ -58,7 +59,10 @@ Sampling designs that produce the input matrices for estimators.
 
 ### salib-estimators
 
-All sensitivity estimators. Each takes a sample matrix (or design) and a model closure, returns a result struct with `Display` and optional `serde`.
+Designed-sample estimators take a typed design and a model closure. Given-data
+estimators take aligned input/output arrays; DGSM takes gradients and variance.
+Results have method-specific fields and optional `serde`. HDMR requires
+`salib-estimators/surrogate` and depends on `salib-surrogate`.
 
 | Family | Function |
 |--------|----------|
@@ -109,17 +113,18 @@ Analytic test functions with closed-form sensitivity indices. Optional — enabl
 | Ishigami | 3 | $S_i$, $S_{Ti}$ |
 | Sobol' G | $d$ | $S_i$, $S_{Ti}$ |
 | Morris | $d$ | $\mu^*$, $\sigma$ classification |
-| Linear | $d$ | exact SRC |
 
 ### salib-cli
 
-Command-line interface. Install with `cargo install salib-cli`.
+The `salib` binary currently prints “CLI not yet implemented” and exits with
+status 2. There are no working `sample`, `run`, or `analyze` commands. Use the
+[library tutorial](quickstart.md) for analyses.
 
-```
-salib sample   # generate samples to CSV
-salib run      # evaluate a model on samples
-salib analyze  # compute sensitivity indices
-```
+### salib-models (unpublished)
+
+Four Stateright models exercise finite protocol invariants. This crate is for
+workspace verification, not an application dependency. Run with
+`cargo run -p salib-models --release`.
 
 ---
 
@@ -132,7 +137,7 @@ All flags on the `salib` facade crate:
 | `samplers` | yes | Sampling designs |
 | `estimators` | yes | All sensitivity estimators |
 | `parallel` | yes | Rayon-based parallel reductions |
-| `surrogate` | no | PCE, HDMR, active subspaces |
+| `surrogate` | no | PCE, active subspaces, and HDMR through estimators |
 | `shapley` | no | Shapley effects |
 | `validation` | no | Analytic test functions |
 | `serde` | no | `Serialize`/`Deserialize` on result types |
@@ -142,8 +147,8 @@ All flags on the `salib` facade crate:
 
 ```toml
 # Kitchen sink
-salib = { version = "0.1", features = ["full", "serde"] }
+salib = { version = "0.2", features = ["full", "serde"] }
 
-# Minimal: just Sobol' indices, no parallelism
-salib = { version = "0.1", default-features = false, features = ["samplers", "estimators"] }
+# Minimal analysis features (other dependencies can still enable rayon)
+salib = { version = "0.2", default-features = false, features = ["samplers", "estimators"] }
 ```

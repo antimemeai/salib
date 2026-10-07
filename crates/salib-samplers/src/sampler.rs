@@ -13,7 +13,7 @@
 //! `RngState` input. SHA-256 over canonical-JSON of the sampler's
 //! config struct. Mirrors `Problem::content_hash`.
 //!
-//! # Determinism
+//! # Bit-reproducibility
 //!
 //! `unit_sample` takes `&mut RngState` and *advances* it through the
 //! draws. Same `RngState` in → bit-identical `Array2<f64>` out, with
@@ -23,6 +23,21 @@ use ndarray::Array2;
 use salib_core::RngState;
 
 /// A sampler that produces unit-cube samples in `[0, 1)^d`.
+///
+/// Map coordinates through input distributions before evaluating a physical model.
+/// Unscrambled Sobol' ignores `RngState` and restarts on each call; LHS advances it.
+///
+/// # Examples
+///
+/// ```rust
+/// use salib_core::RngState;
+/// use salib_samplers::{LhsSampler, Sampler};
+/// let sampler = LhsSampler::classic(2);
+/// let mut rng = RngState::from_seed([42; 32]);
+/// let points = sampler.unit_sample(64, &mut rng);
+/// assert_eq!(points.dim(), (64, 2));
+/// assert!(points.iter().all(|&u| (0.0..1.0).contains(&u)));
+/// ```
 pub trait Sampler: Send + Sync {
     /// Number of factors. The output of [`unit_sample`](Self::unit_sample)
     /// has shape `(n, dim())`.

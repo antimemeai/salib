@@ -98,7 +98,10 @@ pub enum TruncationScheme {
     /// Hyperbolic q-norm: `(Σ αⱼ^q)^{1/q} ≤ max_degree`,
     /// `q ∈ (0, 1]`. At `q = 1` reduces to total-degree; at `q < 1`
     /// favors low-interaction terms.
-    Hyperbolic { q: f64 },
+    Hyperbolic {
+        /// Hyperbolic norm exponent, in `(0,1]` for valid truncation.
+        q: f64,
+    },
 }
 
 /// Sparse-solver choice. See module docstring.

@@ -1,49 +1,13 @@
-//! Saltelli `(A, B, A_Bⁱ)` matrix construction (radial design,
-//! Saltelli 2010) — the design pattern Sobol'-style sensitivity
-//! estimators consume.
+//! Saltelli radial designs in unit-cube coordinates.
 //!
-//! # The radial construction
+//! A single `2d`-column base draw splits into `(A, B)`. Hybrid `A_B[i]`
+//! replaces column `i` of `A` with column `i` of `B`. Saltelli, Jansen,
+//! and Janon estimators use this layout; Owen has its own design.
+//! Optional symmetric `B_A[i]` blocks support pairwise estimates and raise
+//! the evaluation budget from `N(d+2)` to `N(2d+2)`.
 //!
-//! Given a base 2d-dimensional sample of size N (drawn from any
-//! `Sampler` configured for `2d` columns), split into two halves:
-//!
-//! - `A` = first `d` columns (`N × d`).
-//! - `B` = last `d` columns (`N × d`).
-//!
-//! Then for each factor `i ∈ 0..d`, build `A_Bⁱ` by cloning `A`
-//! and replacing its `i`-th column with `B`'s `i`-th column. Result:
-//! `d` matrices each `N × d`. The `(A, B, A_Bⁱ)` bundle is the input
-//! every variance-based Sobol' estimator (Saltelli2010, Jansen1999,
-//! Janon2014, Owen2013) consumes — see PR 7 of
-//!
-//!
-//! Optionally, with `second_order = true`, also build `d` matrices
-//! `B_Aⁱ` (the symmetric construction with B and A swapped); enables
-//! second-order interaction-index estimation. Total cost grows from
-//! `N·(d+2)` to `N·(2d+2)` model evaluations.
-//!
-//! # Why radial
-//!
-//! Saltelli 2010 ("Variance based sensitivity analysis of model
-//! output. Design and estimator for the total sensitivity index")
-//! showed that the radial design — splitting a single 2d-dim base
-//! sample — gives lower MAE for total-order indices than the
-//! original (Saltelli 2002) design that uses two independent d-dim
-//! samples. `SALib`'s default since ~2018 has been the radial design.
-//!
-//! , PR 6
-//! ships **only the radial design**. The original design is deferred
-//! to a follow-on PR; it requires per-sampler-class handling
-//! (LHS forks `RngState`; Sobol' is RNG-deterministic and would need a
-//! `start_index` field to get a second independent sample). Radial
-//! works cleanly on both LHS and Sobol' as a single code path.
-//!
-//! # Sampler dim contract
-//!
-//! `sampler.dim()` must equal `2 * d` where `d` is the SA factor
-//! count. A 7-factor problem with radial Saltelli requires a
-//! 14-dim sampler. The function validates this; odd `sampler.dim()`
-//! returns `SaltelliError::OddBaseDim`.
+//! Construction does not map input distributions. Apply inverse CDFs
+//! consistently across every block, or map inside the model closure.
 
 use std::num::NonZeroUsize;
 
@@ -103,7 +67,10 @@ pub enum SaltelliError {
     /// Radial design requires `sampler.dim()` even (so it splits
     /// cleanly into A and B halves).
     #[error("Saltelli: radial design requires even sampler.dim(), got {dim}")]
-    OddBaseDim { dim: usize },
+    OddBaseDim {
+        /// Input dimension supplied by the caller.
+        dim: usize,
+    },
     /// Grouped construction requires at least one group.
     #[error("Saltelli: groups slice must be non-empty")]
     EmptyGroups,
@@ -111,8 +78,11 @@ pub enum SaltelliError {
     /// dimension `d = sampler.dim() / 2`.
     #[error("Saltelli: group {group} contains factor index {index} but d = {d}")]
     GroupIndexOutOfBounds {
+        /// Zero-based group index.
         group: usize,
+        /// Zero-based index that failed validation.
         index: usize,
+        /// Number of input factors.
         d: usize,
     },
 }
@@ -126,7 +96,7 @@ pub enum SaltelliError {
 /// - `SaltelliError::ZeroN` if `n == 0`.
 /// - `SaltelliError::OddBaseDim` if `sampler.dim()` is odd.
 ///
-/// # Determinism
+/// # Bit-reproducibility
 ///
 /// Pure under `(sampler, rng)`. Same `Sampler` config + same
 /// `RngState` in → bit-identical `SaltelliMatrix` out. The
@@ -136,6 +106,23 @@ pub enum SaltelliError {
 // `n`, `d`, and the loop indices `i`, `j` are the canonical SA
 // notation in Saltelli 2010; the per-dim `a`, `b`, `m` shorthands
 // match. The `many_single_char_names` lint is noisy here.
+///
+/// All matrices contain unit-cube coordinates. This constructor does not take a
+/// `Problem` or apply input distributions. Transform coordinates inside the model
+/// closure or transform every block consistently before evaluation. `second_order`
+/// adds the symmetric hybrid blocks; it does not change Sobol' sequence skipping.
+///
+/// # Examples
+///
+/// ```rust
+/// use salib_core::RngState;
+/// use salib_samplers::{build_saltelli_matrix, LhsSampler};
+/// let mut rng = RngState::from_seed([42; 32]);
+/// let design = build_saltelli_matrix(&LhsSampler::classic(6), 128, true, &mut rng)
+///     .unwrap();
+/// assert_eq!(design.a.dim(), (128, 3));
+/// assert_eq!(design.total_evaluations(), 128 * (2 * 3 + 2));
+/// ```
 #[allow(clippy::many_single_char_names)]
 pub fn build_saltelli_matrix(
     sampler: &dyn Sampler,

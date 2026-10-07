@@ -1,39 +1,41 @@
 # salib-validation
 
-[![crates.io](https://img.shields.io/crates/v/salib-validation.svg)](https://crates.io/crates/salib-validation)
-[![docs.rs](https://img.shields.io/docsrs/salib-validation)](https://docs.rs/salib-validation)
-[![license](https://img.shields.io/crates/l/salib-validation.svg)](https://github.com/antimeme-ai/salib)
+Analytic reference models and closed-form sensitivity indices for testing and
+benchmarking. Depend on this crate directly as a development dependency when
+checking an estimator or integration against known answers. Application analyses
+usually use their own model; the `salib` facade exposes these references through
+its optional `validation` feature.
 
-Analytic test functions with closed-form sensitivity indices for
-validating estimator implementations. Part of the
-[salib](https://crates.io/crates/salib) workspace.
+| API | Purpose |
+|---|---|
+| `ishigami` module | Three-factor nonlinear function, gradient, analytic Sobol' indices, and `[-π,π]` input problem |
+| `sobol_g` module | Tunable-dimensional product function and analytic variance indices on `[0,1]` |
+| `morris_test` module | Additive linear/quadratic functions and analytic elementary effects |
+| `SobolIndicesAnalytic`, `MorrisEffectsAnalytic` | Reference values to compare with sampled estimates |
 
-This crate is primarily for testing and benchmarking. Application code
-rarely needs it directly.
+## Example
 
-## Test functions
+```rust
+use salib_validation::ishigami;
 
-| Function | Module | Factors | Closed-form indices |
-|---|---|---|---|
-| Ishigami | `ishigami` | 3 | First-order, total-order Sobol' |
-| Sobol' G | `sobol_g` | *d* | First-order, total-order Sobol' |
-| Morris additive | `morris_test` | *d* | mu, mu_star, sigma |
-| Morris quadratic | `morris_test` | *d* | mu, mu_star, sigma |
+let problem = ishigami::input_distribution();
+let reference = ishigami::analytic_indices(7.0, 0.1);
+assert_eq!(problem.dim(), 3);
+assert!(reference.first_order[2].abs() < 1e-12);
+assert!(reference.total_order[2] > 0.24); // x3 matters through interaction.
+assert_eq!(ishigami::ishigami(&[0.0, 0.0, 0.0]), 0.0);
+```
 
-Each module provides the function itself, `analytic_indices` (or
-`analytic_effects`), and `input_distribution` returning the canonical
-factor ranges.
+```toml
+[dev-dependencies]
+salib-validation = "0.2"
+```
 
-The Ishigami function at (a=7, b=0.1) is the primary integration test
-across the workspace. Its interaction structure (sin(X1) * X3^4 cross-term)
-exercises both first-order and total-order estimators.
+Use the canonical input distributions when comparing indices. Agreement should
+be assessed within justified sampling tolerances; analytic targets are not exact
+expected floating-point outputs from a finite sample. The Morris references
+here are additive fixtures, not the full original 20-factor Morris function.
+`serde` serializes analytic result types.
 
-## Feature flags
-
-| Flag | Default | Effect |
-|---|---|---|
-| `serde` | no | `Serialize`/`Deserialize` on `SobolIndicesAnalytic`, `MorrisEffectsAnalytic` |
-
-## License
-
-MIT OR Apache-2.0, at your option.
+[API reference](https://docs.rs/salib-validation/latest/salib_validation/).
+MIT OR Apache-2.0.

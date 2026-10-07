@@ -1,27 +1,14 @@
-//! `Problem` — the declarative, content-addressable description of
-//! an SA campaign's input space. Vector of factors, each with a name,
-//! distribution, and kind (continuous / discrete / categorical /
-//! boolean).
+//! Named input distributions and optional factor groups.
 //!
-//! # The construction discipline
+//! [`ProblemBuilder::build`] validates nonempty factors, unique names,
+//! distribution parameters, and group membership. [`Problem`] exposes read-only
+//! factors/groups; external code cannot construct it by struct literal.
+//! Derived serde deserialization does not call the builder: when loading an
+//! external definition, rebuild through [`ProblemBuilder`] to validate it.
 //!
-//! `Problem` is `#[non_exhaustive]`; only `ProblemBuilder::build`
-//! produces `Problem` values. External callers cannot construct via
-//! struct literal, cannot use `Default`-then-mutate, cannot reach
-//! around the builder's parameter validation. Every `Problem` value
-//! reachable across crate boundaries has been validated at build
-//! time.
-//!
-//! # Content-addressing
-//!
-//! `Problem::content_hash() -> [u8; 32]` returns SHA-256 over the
-//! canonical-JSON serialization of the `Problem`. Stable across
-//! calls; content-equivalent `Problem`s hash equally; semantically
-//! distinct `Problem`s hash distinctly. The hash serves as a
-//! content-identifier for "which Problem produced this result?"
-//!
-//! Blake3 deferred to a follow-on PR — Problem JSON is small (factor
-//! descriptions, not sample matrices); SHA-256 suffices.
+//! [`Problem::content_hash`] hashes the current serde representation with
+//! SHA-256. It identifies input configuration, not a full analysis run, and
+//! has no cross-version serialization-stability guarantee.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -45,7 +32,10 @@ pub enum FactorKind {
     /// Categorical factor with `n` distinct levels. Quantile maps
     /// `[0, 1]` to `{0, 1, …, n-1}` via the underlying
     /// `DiscreteUniform { 0, n-1 }` distribution.
-    Categorical { n: usize },
+    Categorical {
+        /// Number of category levels; must be at least one.
+        n: usize,
+    },
     /// Boolean factor — equivalent to `Bernoulli` distribution.
     Boolean,
 }
@@ -56,24 +46,29 @@ pub enum FactorKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Factor {
+    /// Factor name.
     pub name: String,
+    /// Marginal input distribution.
     pub distribution: Distribution,
+    /// Factor role in the experiment.
     pub kind: FactorKind,
 }
 
 /// A named group of factors treated as a single unit in SA.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Group {
+    /// Factor name.
     pub name: String,
+    /// Zero-based indices of the factors belonging to this group.
     pub factor_indices: Vec<usize>,
 }
 
 /// The declarative input-space description for an SA campaign.
 ///
-/// `factors` + optional `groups`. Future fields (`correlation`,
-/// `output`) land via follow-on PRs (each has its own design
-/// questions). `Problem` is `#[non_exhaustive]` — adding those
-/// fields is non-breaking.
+/// Factors retain insertion/column order, with optional groups of factor indices.
+/// Builder-produced values are validated. Derived deserialization bypasses the
+/// builder; reconstruct externally loaded definitions through [`ProblemBuilder`]
+/// if validation is required.
 ///
 /// Validated factors cannot be mutated through public fields:
 ///
@@ -144,7 +139,7 @@ impl Problem {
     }
 }
 
-/// Builder for `Problem`. The only public path to a `Problem` value.
+/// Builder for validated [`Problem`] values.
 #[derive(Debug, Default, Clone)]
 pub struct ProblemBuilder {
     factors: Vec<Factor>,
@@ -160,26 +155,46 @@ pub enum BuildError {
     Empty,
     /// Factor names must be unique.
     #[error("duplicate factor name: {name}")]
-    DuplicateName { name: String },
+    DuplicateName {
+        /// Repeated factor name.
+        name: String,
+    },
     /// Distribution parameters failed validation.
     #[error("invalid distribution for factor {name}: {reason}")]
-    InvalidDistribution { name: String, reason: String },
+    InvalidDistribution {
+        /// Factor name.
+        name: String,
+        /// Description of the failed parameter constraint.
+        reason: String,
+    },
     /// Categorical factor's `n` is 0.
     #[error("Categorical factor {name} must have n >= 1")]
-    EmptyCategorical { name: String },
+    EmptyCategorical {
+        /// Factor name.
+        name: String,
+    },
     /// A group has an empty `factor_indices` list.
     #[error("group {group} has empty factor_indices")]
-    EmptyGroup { group: String },
+    EmptyGroup {
+        /// Group that failed validation.
+        group: String,
+    },
     /// A group references a factor index beyond `factors.len()`.
     #[error("group {group}: factor index {index} out of range (dim={dim})")]
     GroupIndexOutOfRange {
+        /// Group that failed validation.
         group: String,
+        /// Zero-based index that failed validation.
         index: usize,
+        /// Input dimension supplied by the caller.
         dim: usize,
     },
     /// A factor appears in more than one group.
     #[error("factor {index} appears in multiple groups")]
-    FactorInMultipleGroups { index: usize },
+    FactorInMultipleGroups {
+        /// Zero-based index that failed validation.
+        index: usize,
+    },
 }
 
 impl ProblemBuilder {
@@ -229,6 +244,17 @@ impl ProblemBuilder {
     /// Validate and finalize. Returns `Problem` on success; `BuildError`
     /// on validation failure (empty, duplicate names, invalid
     /// distribution params, empty Categorical).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use salib_core::{Distribution, ProblemBuilder};
+    /// let problem = ProblemBuilder::new()
+    ///     .factor("temperature", Distribution::Uniform { lo: 280.0, hi: 320.0 })
+    ///     .build().unwrap();
+    /// assert_eq!(problem.factors()[0].distribution.quantile(0.5), 300.0);
+    /// assert!(ProblemBuilder::new().build().is_err());
+    /// ```
     pub fn build(self) -> Result<Problem, BuildError> {
         if self.factors.is_empty() {
             return Err(BuildError::Empty);

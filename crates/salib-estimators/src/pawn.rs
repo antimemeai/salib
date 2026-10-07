@@ -38,7 +38,7 @@
 //! `(X, Y)` from any sampler. We ship the 2018 form via ordinal-
 //! rank-based slicing — sampler-agnostic.
 //!
-//! # Determinism
+//! # Bit-reproducibility
 //!
 //! Pure under `(X, Y, n_slices)`. Stable sort + ordinal rank →
 //! deterministic slice membership. KS computation is exact (no RNG).
@@ -118,20 +118,38 @@ impl fmt::Display for PawnIndices {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum PawnError {
+    /// An output observation is NaN or infinite.
     #[error("PAWN: output at index {index} must be finite")]
-    NonfiniteOutput { index: usize },
+    NonfiniteOutput {
+        /// Zero-based index that failed validation.
+        index: usize,
+    },
+    /// Input and output shapes are incompatible.
     #[error("PAWN: shape mismatch — X has {x_rows} rows, y has {y_len} elements")]
-    ShapeMismatch { x_rows: usize, y_len: usize },
+    ShapeMismatch {
+        /// Number of rows in the input matrix.
+        x_rows: usize,
+        /// Number of output observations.
+        y_len: usize,
+    },
+    /// At least one input dimension is required.
     #[error("PAWN: d must be ≥ 1, got 0")]
     ZeroD,
+    /// At least two conditioning slices are required.
     #[error("PAWN: n_slices must be ≥ 2, got {n_slices}")]
-    TooFewSlices { n_slices: usize },
+    TooFewSlices {
+        /// Number of conditioning slices supplied.
+        n_slices: usize,
+    },
     /// Need at least 2 samples per slice for the KS statistic to be
     /// meaningful: `N ≥ 2 · n_slices`.
     #[error("PAWN: N must be ≥ 2·n_slices (got N={n}, n_slices={n_slices}, minimum={minimum})")]
     InsufficientSamples {
+        /// Sample count supplied by the caller.
         n: usize,
+        /// Number of conditioning slices supplied.
         n_slices: usize,
+        /// Minimum sample count required by this configuration.
         minimum: usize,
     },
 }

@@ -1,141 +1,97 @@
 # salib
 
-[![crates.io](https://img.shields.io/crates/v/salib.svg)](https://crates.io/crates/salib)
-[![docs.rs](https://img.shields.io/docsrs/salib)](https://docs.rs/salib)
-[![CI](https://github.com/antimeme-ai/salib/actions/workflows/ci.yml/badge.svg)](https://github.com/antimeme-ai/salib/actions)
-[![license](https://img.shields.io/crates/l/salib.svg)](https://github.com/antimeme-ai/salib)
-
-Global sensitivity analysis for Rust, implemented from the primary
-literature. Bit-reproducible: same seed, same results, regardless of thread count.
+Facade for global sensitivity analysis in Rust: validated input descriptions,
+sampling designs, and 20+ analysis methods implemented from primary papers.
+Use this crate for a complete Rust analysis. Core types are re-exported at the
+root; sampling and estimation live under `salib::samplers` and
+`salib::estimators`. Depend on individual crates for a narrower API surface.
 
 ## Quickstart
 
+Estimate which of three independent inputs explains the Ishigami model’s output
+variance. The third input matters only through an interaction, making it a useful
+example of why both first-order (`S1`) and total-effect (`ST`) indices matter.
+
 ```toml
 [dependencies]
-salib = "0.1"
+salib = "0.2"
 ```
 
 ```rust
 use std::f64::consts::PI;
-use salib::*;
-use salib::samplers::{SobolSampler, build_saltelli_matrix};
+use salib::{Distribution, ProblemBuilder, RngState};
+use salib::samplers::{build_saltelli_matrix, SobolSampler};
 use salib::estimators::estimate_saltelli2010;
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let problem = ProblemBuilder::new()
         .factor("x1", Distribution::Uniform { lo: -PI, hi: PI })
         .factor("x2", Distribution::Uniform { lo: -PI, hi: PI })
         .factor("x3", Distribution::Uniform { lo: -PI, hi: PI })
-        .build()
-        .unwrap();
+        .build()?;
 
-    let mut rng = RngState::from_seed([0u8; 32]);
+    let mut rng = RngState::from_seed([0; 32]);
     let sampler = SobolSampler::minimal(2 * problem.dim());
-    let saltelli = build_saltelli_matrix(&sampler, 8192, false, &mut rng).unwrap();
+    let design = build_saltelli_matrix(&sampler, 8192, false, &mut rng)?;
 
-    // Ishigami function: y = sin(x1) + 7*sin(x2)^2 + 0.1*x3^4*sin(x1)
-    let indices = estimate_saltelli2010(&saltelli, |x| {
-        x[0].sin() + 7.0 * x[1].sin().powi(2) + 0.1 * x[2].powi(4) * x[0].sin()
-    });
-
-    println!("{indices}");
+    // Designs contain unit-cube coordinates; map them to physical inputs.
+    let model = |u: &[f64]| {
+        let x: Vec<f64> = problem.factors().iter().zip(u)
+            .map(|(factor, &ui)| factor.distribution.quantile(ui))
+            .collect();
+        x[0].sin() + 7.0 * x[1].sin().powi(2)
+            + 0.1 * x[2].powi(4) * x[0].sin()
+    };
+    let indices = estimate_saltelli2010(&design, model);
+    for (i, factor) in problem.factors().iter().enumerate() {
+        println!("{}: S1 = {:.4}, ST = {:.4}",
+            factor.name, indices.first_order[i], indices.total_order[i]);
+    }
+    Ok(())
 }
 ```
 
-## Methods
+The sampler needs six columns to construct two three-factor base matrices.
+`8192` is the base sample size: this design requires 40,960 model evaluations.
+`false` skips the additional matrices for pairwise indices. The estimator calls
+the closure with unit-cube rows; the closure applies each factor’s inverse CDF.
 
-| Method | Function | Reference |
-|---|---|---|
-| **Variance-based (Sobol')** | | |
-| Saltelli 2010 | `estimate_saltelli2010` | Saltelli et al. (2010) *Comp. Phys. Comm.* 181(2) |
-| Jansen | `estimate_jansen` | Jansen (1999) *Comp. Phys. Comm.* 117(1-2) |
-| Janon | `estimate_janon` | Janon et al. (2014) *Math. Comp. Sim.* 107 |
-| Owen | `estimate_owen` | Owen (2013) *ACM Trans. Model. Comp. Sim.* 23(1) |
-| Given-data Sobol' | `estimate_given_data_sobol` | Plischke et al. (2013) *Eur. J. Oper. Res.* 226(3) |
-| **Elementary effects** | | |
-| Morris | `estimate_morris_effects` | Morris (1991) *Technometrics* 33(2) |
-| Grouped Morris | `estimate_grouped_morris_effects` | Campolongo et al. (2007) *Env. Mod. Soft.* 22(10) |
-| **Frequency-based** | | |
-| FAST / eFAST | `estimate_fast` | Cukier et al. (1973); Saltelli et al. (1999) |
-| RBD-FAST | `estimate_rbd_fast` | Tarantola et al. (2006) *Rel. Eng. Sys. Safety* 91(6) |
-| **Distribution-based** | | |
-| Borgonovo delta | `estimate_borgonovo_delta` | Borgonovo (2007) *Rel. Eng. Sys. Safety* 92(6) |
-| PAWN | `estimate_pawn` | Pianosi et al. (2015) *Env. Mod. Soft.* 67 |
-| QOSA | `estimate_qosa` | Fort et al. (2016) *Stat. Comp.* 26(1-2) |
-| **Derivative-based** | | |
-| DGSM | `estimate_dgsm` | Sobol' & Kucherenko (2009) *Math. Comp. Sim.* 79(10) |
-| **Regression** | | |
-| SRC / SRRC / PCC / PRCC | `estimate_regression_indices` | Saltelli & Marivoet (1990) *Comp. Stat. Data Anal.* 9(1) |
-| **Surrogate** | | |
-| PCE (full OLS) | `fit_full_pce` | Xiu & Karniadakis (2002) *SIAM J. Sci. Comp.* 24(2) |
-| PCE (sparse LARS/OMP) | `fit_sparse_pce` | Blatman & Sudret (2011) *J. Comp. Phys.* 230(6) |
-| HDMR | `estimate_hdmr` | Li et al. (2002) *J. Phys. Chem. A* 106(37) |
-| Active subspaces | `compute_active_subspace` | Constantine (2015) *Active Subspaces*, SIAM |
-| **Game-theoretic** | | |
-| Shapley effects | `estimate_shapley` | Song et al. (2016) *SIAM/ASA J. Unc. Quant.* 4(1) |
-| **Experimental design** | | |
-| ANOVA (two- and three-way) | `estimate_anova_two_way` | Fisher (1925) *Statistical Methods* |
-| G-theory (D-study) | `estimate_g_theory_pir` | Brennan (2001) *Generalizability Theory*, Springer |
-| Discrepancy (L2-star) | `compute_discrepancy` | Hickernell (1998) in *Monte Carlo and Quasi-Monte Carlo Methods* |
-| Fractional factorial | `estimate_fractional_factorial` | Box et al. (1978) *Statistics for Experimenters* |
+Expect `S1` near `[0.314, 0.442, 0.000]` and `ST` near
+`[0.558, 0.442, 0.244]`. Thus `x3` contributes through interactions despite its
+zero main effect. See the [step-by-step tutorial](https://github.com/antimeme-ai/salib/blob/main/docs/quickstart.md) for
+interpretation, sampler alternatives, and bootstrap intervals.
 
-## Crate structure
+## Choose dependencies and features
 
-`salib` is a facade that re-exports subcrates. Use it for convenience,
-or depend on individual crates for finer control.
-
-| Crate | Role |
+| Need | API / dependency |
 |---|---|
-| [`salib-core`](https://crates.io/crates/salib-core) | `Problem`, `Factor`, `Distribution`, `RngState`, deterministic reductions |
-| [`salib-samplers`](https://crates.io/crates/salib-samplers) | LHS, Sobol' QMC, Saltelli, Morris trajectories, FAST/eFAST, Iman-Conover |
-| [`salib-estimators`](https://crates.io/crates/salib-estimators) | All estimators listed above |
-| [`salib-surrogate`](https://crates.io/crates/salib-surrogate) | PCE, sparse PCE, active subspaces |
-| [`salib-shapley`](https://crates.io/crates/salib-shapley) | Shapley effects |
-| [`salib-validation`](https://crates.io/crates/salib-validation) | Ishigami, Sobol' G, Morris test functions with closed-form indices |
-| [`salib-cli`](https://crates.io/crates/salib-cli) | `salib sample`, `salib run`, `salib analyze` |
+| Standard sampling and estimation | `salib` defaults: `samplers`, `estimators`, `parallel` |
+| Input definitions and reproducible RNG only | `salib-core` (`ProblemBuilder`, `Distribution`, `RngState`) |
+| Generate designs for an external evaluator | `salib-samplers` (`Sampler`, `SaltelliMatrix`, Morris/FAST designs) |
+| Analyze cached outputs | `salib-estimators` (Sobol', given-data measures, bootstrap) |
+| PCE or active subspaces | `salib` with `surrogate`, or `salib-surrogate` directly |
+| Independent-input Shapley attribution | `salib` with `shapley`, or `salib-shapley` |
+| Reference models | `validation`, or `salib-validation` as a dev dependency |
 
-## Feature flags
+`full` enables samplers, estimators, surrogate, Shapley, and validation. `serde`
+adds result serialization; `arrow` adds RecordBatch conversions; `polars` adds
+DataFrame conversions and implies `arrow`. These interop features are separate
+from `full`. HDMR requires both estimator and surrogate support. Core definitions
+already support serde.
 
-| Flag | Default | Effect |
-|---|---|---|
-| `samplers` | yes | Sampling designs (LHS, Sobol', Saltelli, Morris, FAST) |
-| `estimators` | yes | All sensitivity estimators |
-| `parallel` | yes | Rayon-based parallel reductions |
-| `surrogate` | no | PCE, HDMR, active subspaces |
-| `shapley` | no | Shapley effects |
-| `validation` | no | Analytic test functions |
-| `serde` | no | `Serialize`/`Deserialize` on all result types |
-| `arrow` | no | `RecordBatch` conversions for Arrow interop |
-| `polars` | no | `DataFrame` conversions (implies `arrow`) |
-| `full` | no | Everything except `serde`, `arrow`, `polars` |
-
-## Bit-reproducibility
-
-Identical `RngState` seeds produce identical results regardless of thread
-count. Parallel reductions use tree-structured accumulation to eliminate
-float-associativity nondeterminism under rayon. Disable `parallel` for
-serial-only builds; results remain identical.
-
-## Citation
-
-If you use salib in published research, please cite:
-
-```bibtex
-@software{salib_rs,
-  author  = {{antimeme.ai}},
-  title   = {salib: Global Sensitivity Analysis for Rust},
-  url     = {https://github.com/antimeme-ai/salib},
-  version = {0.1.1},
-  year    = {2026}
-}
+```toml
+# Core, samplers, and estimators with serial reduction fallback.
+[dependencies]
+salib = { version = "0.2", default-features = false, features = ["samplers", "estimators"] }
 ```
 
-For individual methods, see the references in the method table above.
+Features are additive across dependencies, so another crate can still enable
+rayon. Bit-reproducibility means identical inputs and full RNG state yield
+identical bits across thread counts for the same binary/platform and reproducible
+model. Kani and Stateright check bounded implementation invariants alongside
+analytic and metamorphic tests; they do not prove all estimators correct.
 
-## MSRV
+[Documentation hub](https://github.com/antimeme-ai/salib/blob/main/docs/index.md) ·
+[API reference](https://docs.rs/salib/latest/salib/)
 
-1.87
-
-## License
-
-MIT OR Apache-2.0, at your option.
+Rust 1.87 or later. MIT OR Apache-2.0.

@@ -28,7 +28,7 @@
 //! sampler's random phase shifts produce different realizations
 //! that converge to the same population indices).
 //!
-//! # Determinism
+//! # Bit-reproducibility
 //!
 //! Pure under `(design, model)`. The `rustfft` planner is
 //! bit-reproducible for a fixed input length; spectrum extraction
@@ -107,8 +107,12 @@ impl fmt::Display for FastIndices {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum FastEstimatorError {
+    /// The supplied harmonic count is outside the supported range.
     #[error("FAST estimator: harmonic must be in 1..=32, got {harmonic}")]
-    InvalidHarmonic { harmonic: u32 },
+    InvalidHarmonic {
+        /// Maximum harmonic supplied by the caller.
+        harmonic: u32,
+    },
     /// Total variance is zero (or numerical floor) — model is
     /// constant, no sensitivity to recover.
     #[error("FAST estimator: total variance is zero (model output is constant)")]

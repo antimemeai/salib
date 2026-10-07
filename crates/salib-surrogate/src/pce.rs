@@ -200,19 +200,40 @@ impl fmt::Display for SobolFromPce {
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum PceError {
+    /// Input and output shapes are incompatible.
     #[error("PCE: shape mismatch — samples has {x_rows} rows, y has {y_len} elements")]
-    ShapeMismatch { x_rows: usize, y_len: usize },
+    ShapeMismatch {
+        /// Number of rows in the input matrix.
+        x_rows: usize,
+        /// Number of output observations.
+        y_len: usize,
+    },
+    /// At least one input dimension is required.
     #[error("PCE: d must be ≥ 1, got 0")]
     ZeroD,
+    /// Each input dimension must have one polynomial family.
     #[error("PCE: families.len() ({families_len}) must equal samples.ncols() ({d})")]
-    FamiliesDimMismatch { families_len: usize, d: usize },
+    FamiliesDimMismatch {
+        /// Number of polynomial families supplied.
+        families_len: usize,
+        /// Number of input factors.
+        d: usize,
+    },
+    /// The sample count is too small for the requested analysis.
     #[error(
         "PCE: insufficient samples — need N ≥ P (got N={n}, P={basis_size}); \
          a healthy fit needs N ≈ 2·P"
     )]
-    InsufficientSamples { n: usize, basis_size: usize },
+    InsufficientSamples {
+        /// Sample count supplied by the caller.
+        n: usize,
+        /// Number of candidate polynomial terms.
+        basis_size: usize,
+    },
+    /// The polynomial design matrix could not be factorized.
     #[error("PCE: design matrix XᵀX is singular (Cholesky failed)")]
     SingularDesignMatrix,
+    /// Output variance is zero or below the estimator threshold.
     #[error("PCE: Var(Y) is zero (model output is constant)")]
     ZeroVariance,
 }
@@ -232,6 +253,21 @@ pub enum PceError {
 /// - [`PceError::InsufficientSamples`] if `N < P`.
 /// - [`PceError::SingularDesignMatrix`] if Cholesky on `Ψᵀ Ψ`
 ///   fails (typically near-collinearity in the basis).
+///
+/// Canonical coordinates must match each family’s weight: `[-1,1]` for Legendre,
+/// standard-normal coordinates for Hermite. Validate predictions on held-out data
+/// before treating coefficient-derived indices as simulator sensitivities.
+///
+/// # Examples
+///
+/// ```rust
+/// use ndarray::array;
+/// use salib_surrogate::{fit_full_pce, PolynomialFamily};
+/// let x = array![[-1.0], [0.0], [1.0]];
+/// let pce = fit_full_pce(x.view(), &[-1.0, 1.0, 3.0],
+///     &[PolynomialFamily::Legendre], 1).unwrap();
+/// assert!((pce.evaluate(&[0.25]) - 1.5).abs() < 1e-12);
+/// ```
 pub fn fit_full_pce(
     samples_canonical: ArrayView2<'_, f64>,
     y: &[f64],

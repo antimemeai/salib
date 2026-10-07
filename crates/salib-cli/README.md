@@ -1,28 +1,23 @@
 # salib-cli
 
-[![crates.io](https://img.shields.io/crates/v/salib-cli.svg)](https://crates.io/crates/salib-cli)
-[![license](https://img.shields.io/crates/l/salib-cli.svg)](https://github.com/antimeme-ai/salib)
+Reserved command-line package for the salib workspace. The binary is currently a
+stub: it prints `salib: CLI not yet implemented` and exits with status 2. Depend
+on the `salib` library to run analyses today. There are no public library types,
+functions, or working `sample`, `run`, or `analyze` subcommands in this package.
 
-Command-line interface for [salib](https://crates.io/crates/salib).
+## Current behavior
 
-```
-cargo install salib-cli
-```
+From a source checkout:
 
-## Subcommands
-
-```
-salib sample <problem.yaml> --sampler=<sobol|lhs|saltelli|morris|fast> --n=<N> --seed=<s>
-salib run    <experiment.yaml>
-salib analyze <samples.parquet> <outputs.parquet> --estimator=<saltelli2010|jansen|...>
+```sh
+cargo run -p salib-cli --bin salib
+# salib: CLI not yet implemented
+# Exit status: 2
 ```
 
-`sample` generates a design matrix from a problem definition.
-`run` evaluates a model over a sample matrix.
-`analyze` computes sensitivity indices from sample/output pairs.
+For Rust applications use `salib`; for independent sampling or cached-data
+analysis use `salib-samplers` or `salib-estimators`. The CLI package currently has
+no optional features. Its library target is empty and is not an analysis API.
 
-All operations are reproducible: the same seed produces the same results.
-
-## License
-
-MIT OR Apache-2.0, at your option.
+[Library tutorial](https://github.com/antimeme-ai/salib/blob/main/docs/quickstart.md).
+MIT OR Apache-2.0.

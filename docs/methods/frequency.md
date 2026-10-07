@@ -59,7 +59,9 @@ let design: FastDesign = build_fast_design(
     &mut rng,
 ).unwrap();
 
-let indices = estimate_fast(&design, |x| {
+let indices = estimate_fast(&design, |u| {
+    let pi = std::f64::consts::PI;
+    let x = [2.0*pi*u[0]-pi, 2.0*pi*u[1]-pi, 2.0*pi*u[2]-pi];
     x[0].sin()
         + 7.0 * x[1].sin().powi(2)
         + 0.1 * x[2].powi(4) * x[0].sin()

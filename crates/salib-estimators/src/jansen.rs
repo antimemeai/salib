@@ -35,7 +35,7 @@
 //! near-saturation factors (`S_i → 1`), the squared-difference path
 //! avoids the cancellation noise that Saltelli's Eq c can exhibit.
 //!
-//! # Determinism
+//! # Bit-reproducibility
 //!
 //! Pure under `(matrix, model)`. All sums route through `tree_sum`.
 //! Same matrix + model in → bit-identical output.

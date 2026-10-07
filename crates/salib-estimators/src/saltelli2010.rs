@@ -25,7 +25,7 @@
 //! S_T_i = (1/(2N)) Σⱼ (fa[j] - fab[i][j])² / D         (Jansen 1999, Eq f)
 //! ```
 //!
-//! # Determinism
+//! # Bit-reproducibility
 //!
 //! Pure function of `(matrix, model)`. All sums route through
 //! `salib_core::reduce::tree_sum` / `tree_dot` / `tree_var` —
@@ -68,6 +68,26 @@ use crate::sobol_indices::SobolIndices;
 /// - `matrix.a.shape() == matrix.b.shape() == [n, d]`.
 /// - `matrix.a_b.len() == d`, each `n × d`.
 /// - `n ≥ 1`, `d ≥ 1`.
+///
+/// The closure receives coordinates exactly as stored in `matrix`: unit-cube
+/// coordinates for an unmodified sampler design. Map distributions yourself.
+/// Assumes independent inputs and a reproducible scalar model. Total effects
+/// include interactions, so their sum need not equal one.
+///
+/// # Examples
+///
+/// ```rust
+/// use salib_core::RngState;
+/// use salib_samplers::{build_saltelli_matrix, LhsSampler};
+/// use salib_estimators::estimate_saltelli2010;
+/// let mut rng = RngState::from_seed([42; 32]);
+/// let design = build_saltelli_matrix(&LhsSampler::classic(4), 2048, false, &mut rng)
+///     .unwrap();
+/// let indices = estimate_saltelli2010(&design, |x| x[0] + 2.0 * x[1]);
+/// // For independent Uniform(0,1) inputs, the variance shares are 1/5 and 4/5.
+/// assert!((indices.first_order[0] - 0.2).abs() < 0.08);
+/// assert!((indices.total_order[1] - 0.8).abs() < 0.08);
+/// ```
 pub fn estimate_saltelli2010<F>(matrix: &SaltelliMatrix, model: F) -> SobolIndices
 where
     F: Fn(&[f64]) -> f64,
@@ -192,6 +212,22 @@ where
 ///
 /// Panics if `fa`, `fb`, or any `fab[i]` have different lengths, or if
 /// `fab` is empty.
+///
+/// For external simulators, preserve the row order across `fa`, `fb`, and every
+/// `fab[i]`. A vector of outputs from arbitrary unrelated observations is not a
+/// Saltelli design. Small sample counts can produce inaccurate or negative indices.
+///
+/// # Examples
+///
+/// ```rust
+/// use salib_estimators::estimate_saltelli2010_from_outputs;
+/// // One-factor identity model: A_B replaces the only column, so fab[0] = fb.
+/// let fa = [0.0, 1.0, 2.0, 3.0];
+/// let fb = [3.0, 2.0, 1.0, 0.0];
+/// let indices = estimate_saltelli2010_from_outputs(&fa, &fb, &[fb.to_vec()]);
+/// assert_eq!(indices.dim, 1);
+/// assert_eq!(indices.n, 4);
+/// ```
 pub fn estimate_saltelli2010_from_outputs(
     fa: &[f64],
     fb: &[f64],

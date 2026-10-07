@@ -52,7 +52,7 @@
 //! few percent — and far better than ignoring dependence entirely.
 //! Mara 2015 § 3.2 documents this caveat.
 //!
-//! # Determinism
+//! # Bit-reproducibility
 //!
 //! Same `RngState` in → bit-identical output. The internal `Z`
 //! draw and the rank-reorder are deterministic w.r.t. the input
@@ -77,24 +77,52 @@ use salib_core::{Distribution, RngState};
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum ImanConoverError {
+    /// The sample matrix has no observations.
     #[error("iman-conover: independent_samples must have ≥ 1 row, got 0")]
     EmptyInput,
+    /// At least one input dimension is required.
     #[error("iman-conover: d must be ≥ 1, got 0 cols")]
     ZeroD,
+    /// The target correlation matrix must be square with one axis per factor.
     #[error("iman-conover: target_rank_correlation must be {d}×{d} square, got {rows}×{cols}")]
-    NonSquareTarget { d: usize, rows: usize, cols: usize },
+    NonSquareTarget {
+        /// Number of input factors.
+        d: usize,
+        /// Number of rows in the supplied correlation matrix.
+        rows: usize,
+        /// Number of columns in the supplied correlation matrix.
+        cols: usize,
+    },
+    /// Target correlation entries disagree across the diagonal.
     #[error(
         "iman-conover: target_rank_correlation must be symmetric (entry [{i},{j}] differs from [{j},{i}] by {diff})"
     )]
-    NonSymmetricTarget { i: usize, j: usize, diff: f64 },
+    NonSymmetricTarget {
+        /// Zero-based row or factor index.
+        i: usize,
+        /// Zero-based column index.
+        j: usize,
+        /// Difference between the two symmetric entries.
+        diff: f64,
+    },
+    /// The target correlation diagonal must equal one.
     #[error(
         "iman-conover: target_rank_correlation must have unit diagonal (entry [{i},{i}] = {value})"
     )]
-    NonUnitDiagonal { i: usize, value: f64 },
+    NonUnitDiagonal {
+        /// Zero-based row or factor index.
+        i: usize,
+        /// Value that failed validation.
+        value: f64,
+    },
+    /// A matrix required for Cholesky factorization is not positive definite.
     #[error(
         "iman-conover: target_rank_correlation is not positive-definite (Cholesky failed at index {i})"
     )]
-    NotPositiveDefinite { i: usize },
+    NotPositiveDefinite {
+        /// Zero-based row or factor index.
+        i: usize,
+    },
 }
 
 /// Apply the Iman-Conover correlation transformation to a sample

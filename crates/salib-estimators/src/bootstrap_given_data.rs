@@ -65,7 +65,7 @@
 //! `np.nan` for failed resamples and `np.nanpercentile` for the CI;
 //! we make the count explicit in the result type).
 //!
-//! # Determinism
+//! # Bit-reproducibility
 //!
 //! Pure under `(x, y, n_resamples, alpha, rng_state, estimator_fn)`.
 //! Caller supplies the RNG (`salib_core::RngState`, the workspace
@@ -159,10 +159,18 @@ pub enum BootstrapGivenDataError {
     ZeroResamples,
     /// `alpha` outside the open interval `(0, 1)`.
     #[error("bootstrap-given-data: alpha must be in (0, 1), got {alpha}")]
-    OutOfRangeAlpha { alpha: f64 },
+    OutOfRangeAlpha {
+        /// Significance or quantile level supplied; must be finite and in `(0,1)`.
+        alpha: f64,
+    },
     /// `x.nrows() != y.len()`.
     #[error("bootstrap-given-data: shape mismatch — X has {x_rows} rows, y has {y_len} elements")]
-    ShapeMismatch { x_rows: usize, y_len: usize },
+    ShapeMismatch {
+        /// Number of rows in the input matrix.
+        x_rows: usize,
+        /// Number of output observations.
+        y_len: usize,
+    },
     /// `x.nrows() == 0` — cannot bootstrap an empty sample.
     #[error("bootstrap-given-data: N must be ≥ 1, got 0")]
     EmptySample,
@@ -191,7 +199,7 @@ pub enum BootstrapGivenDataError {
 /// `n_skipped` and excludes that draw from the percentile pool. See
 /// the module-level "Failed-resample handling" section.
 ///
-/// # Determinism
+/// # Bit-reproducibility
 ///
 /// Pure under `(x, y, n_resamples, alpha, rng_state, estimator_fn)`.
 /// Same `RngState` in → bit-identical `BootstrapCi` out, provided
