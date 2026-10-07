@@ -14,7 +14,7 @@ example of why both first-order (`S1`) and total-effect (`ST`) indices matter.
 
 ```toml
 [dependencies]
-salib = "0.2"
+salib = "0.3"
 ```
 
 ```rust
