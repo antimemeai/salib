@@ -81,3 +81,25 @@ publishing all eight 0.3.0 crates with the checked publisher, and tagging and
 creating the GitHub release. Record actual outcomes separately below. Existing
 validation above applies to the production source being shipped; registry
 publication authorization has not yet been exercised.
+
+## Shipment outcome
+
+Committed the reviewed tree as 96124e8 and pushed release/0.3.0. Updated PR #1
+to describe the final implementation and validation, then merged its exact
+head as e0876d65181580edea653edf7eb90180c5065572. Fast-forwarded local master;
+verified its crates, manifests, lockfile and publisher match the reviewed
+commit.
+
+The explicit publisher built and verified all eight crates again, then the
+first registry upload (salib-core) failed with HTTP403 "authentication failed".
+No upload succeeded. Official crates.io version endpoints returned404 for
+all eight0.3.0 versions afterward. Cargo has one saved token, no token
+environment override, no alternative configured provider and no repository
+publishing workflow. Credential values were never printed. Requested a local
+Cargo login refresh from the operator; do not retry the rejected token.
+
+Pushed annotated tag v0.3.0 at the merged reviewed source and prepared a GitHub
+release draft explaining the publication blocker. Keep the draft unpublished
+until all registry uploads succeed. Publication remains authorized when the
+credential is refreshed. Updated the release assessment to reflect actual
+shipment status; this follow-up changes only documentation, not released code.

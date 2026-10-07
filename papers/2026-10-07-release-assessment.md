@@ -1,10 +1,20 @@
 # Push and release assessment, 2026-10-07
 
-**Ready to commit and push the reviewed changes. Ready for the 0.3.0 crate
-release after the changes are committed and the release branch is merged.**
+**Reviewed changes pushed and PR #1 merged. The source is tagged v0.3.0;
+crates.io publication is blocked by rejected credentials.**
 No unresolved blocker remains in the audited implementation or release checks.
-The working tree is still uncommitted on `release/0.3.0`. No push, merge, tag,
-GitHub review comment, or registry upload occurred.
+The operator authorized shipment with "send it". Commit `96124e8` was pushed and
+merged as `e0876d65181580edea653edf7eb90180c5065572`, which is the source tag's
+commit. All eight crates packaged and built again during actual publication.
+The first upload, salib-core, returned HTTP 403 "authentication failed"; no
+crate was published. The official registry version endpoints subsequently
+returned HTTP 404 for all eight 0.3.0 versions.
+
+A GitHub release draft is prepared. It remains a draft until registry
+publication succeeds. The saved Cargo token needs refreshing locally with
+`cargo +1.95.0 login`; do not put registry credentials in chat. Then retry
+`scripts/publish.sh --publish` from the clean tagged source. The table below
+records the pre-shipment validation and availability checks.
 
 ## Validation of the final working tree
 
@@ -94,6 +104,7 @@ cargo run --offline --locked -p salib-estimators --example audit_regression_ties
 CARGO_BUILD_JOBS=2 ./scripts/publish.sh --dry-run
 ```
 
-After committing/pushing the reviewed tree and merging the release branch,
-`./scripts/publish.sh --publish` is the explicit publication command. Publishing
-and tagging remain subsequent operator-authorized actions, not completed work.
+The explicit publication command is `./scripts/publish.sh --publish`.
+Push, merge and source tagging are complete; registry upload and publishing the
+prepared GitHub release draft remain outstanding because authentication failed.
+Publication remains authorized once the credential is refreshed.
