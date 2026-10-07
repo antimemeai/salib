@@ -1,70 +1,56 @@
-//! Sparse Polynomial Chaos Expansion via forward-selection solvers
-//! with leave-one-out cross-validation stopping (Blatman-Sudret 2011,
-//! Blatman 2009 thesis Ch 3-4). Same [`PolynomialChaos`] output type
-//! as [`crate::pce::fit_full_pce`] , so
-//! [`crate::pce::sobol_indices_from_pce`] works unchanged.
+//! Sparse polynomial chaos expansion using forward selection and OLS refits.
 //!
-//! # Two solvers, run in parallel for evaluation
+//! Both solvers return [`PolynomialChaos`], so their fitted polynomials
+//! can be passed to [`crate::pce::sobol_indices_from_pce`].
 //!
-//! - [`SparseSolver::Omp`] — **Orthogonal Matching Pursuit**
-//!   (Pati-Rezaiifar-Krishnaprasad 1993; Blatman 2009 § 3.2 names
-//!   it as a valid PCE alternative). At each step pick the basis
-//!   column most correlated with the residual, add to the active
-//!   set, refit OLS on the active set, recompute residual, stop on
-//!   LOO-CV upturn or `max_terms`. Trivial to implement, robust to
-//!   noise; the workhorse.
+//! # Solvers
 //!
-//! - [`SparseSolver::Lars`] — **Least Angle Regression**
-//!   (Efron-Hastie-Johnstone-Tibshirani 2004 § 2). At each step add
-//!   the most-correlated column to the active set, then move all
-//!   active coefficients along the *equiangular* direction `u_A`
-//!   (the unit vector making equal angles with every column of the
-//!   sign-flipped active matrix), shrinking the maximal correlation
-//!   uniformly until a new column matches it. Stop on LOO-CV upturn
-//!   under the LARS-OLS hybrid (refit OLS at each step end for the
-//!   error evaluation) per Blatman 2009.
+//! - [`SparseSolver::Omp`] selects the centered, unit-length column with
+//!   the largest absolute inner product with the residual, then refits OLS.
+//! - [`SparseSolver::Lars`] uses equiangular steps for selection and OLS
+//!   refits for the returned coefficients. It centers the response and
+//!   centers and normalizes predictors as in
+//!   [Efron et al. (2004)](https://arxiv.org/pdf/math/0406456), Eq. 1.1.
 //!
-//! Patrick's framing: "we are definitely thunderdoming our own
-//! metrics" — both solvers ship as first-class options so a workload
-//! can pick the one that fits, and so we can compare on the same
-//! Ishigami fixture.
+//! Both selection paths exclude constant predictor columns. OLS refits use
+//! the original polynomial columns and include the intercept. LARS admits
+//! tied correlations together at each knot. If a whole tie group would
+//! exceed `max_terms`, it stops before that group rather than splitting it.
 //!
-//! # Hyperbolic q-norm truncation
+//! Both keep the fit with the lowest observed PRESS score and stop
+//! after three consecutive steps without improvement, or at the term
+//! limit. This is a fixed-basis implementation. [Blatman and Sudret
+//! (2011)](https://doi.org/10.1016/j.jcp.2010.12.021) also adjust degree and experimental
+//! design and uses a corrected error criterion.
 //!
-//! Independent of solver choice. [`TruncationScheme::Hyperbolic`]
-//! filters the candidate basis to multi-indices with
-//! `(Σ αⱼ^q)^{1/q} ≤ p`, suppressing high-interaction terms that
-//! sparse methods would discard anyway. Per Blatman-Sudret 2011
-//! § 3.2; default `q = 0.75` is their recommendation.
+//! # Hyperbolic truncation
 //!
-//! # LOO-CV closed form (Allen's PRESS)
+//! [`TruncationScheme::Hyperbolic`] retains multi-indices satisfying
+//! `(Σ αⱼ^q)^(1/q) ≤ p`, for `0 < q ≤ 1`. Smaller `q` excludes more
+//! interaction terms; useful interactions can also be excluded. See
+//! Blatman and Sudret (2011), §3.2. For `q < 1` this is a quasi-norm.
 //!
-//! For OLS on an active basis `Ψ_A` of `k` columns:
+//! # PRESS score
+//!
+//! For a fixed OLS basis with nonsingular leave-one-out fits:
 //!
 //! ```text
-//! LOO_err = (1/N) · Σᵢ ((yᵢ - ŷᵢ) / (1 - hᵢᵢ))²
+//! LOO_err = (1/N) Σᵢ ((yᵢ - ŷᵢ) / (1 - hᵢᵢ))²
+//! H = Ψ_A (Ψ_Aᵀ Ψ_A)⁻¹ Ψ_Aᵀ
 //! ```
 //!
-//! where `hᵢᵢ` is the i-th diagonal of the hat matrix
-//! `H = Ψ_A (Ψ_Aᵀ Ψ_A)⁻¹ Ψ_Aᵀ`. No need to refit `N` times. Computed
-//! per step from the current Cholesky factor. Diverges when
-//! `1 - hᵢᵢ → 0` (an active row perfectly determined by the basis);
-//! we treat `hᵢᵢ ≥ 1 - 1e-10` as a singularity and bail.
+//! If any row has `1-hᵢᵢ <= 1e-10` or nonfinite leverage, the entire
+//! candidate receives an infinite score and cannot be selected as best.
+//! If no candidate has a finite score, fitting returns an error.
+//! The score has squared-output units. It is not corrected for basis
+//! selection, normalized by output variance, or a held-out error estimate.
 //!
-//! # Cost
+//! # Cost and output
 //!
-//! - OMP: `O(K · (NP + k³))` for `K` steps and active-set size `k`,
-//!   where `P` is the candidate basis size.
-//! - LARS: `O(K · (NP + k³))` per step (same complexity; the
-//!   equiangular-vector solve is the same `O(k³)` Cholesky).
-//!
-//! # Output
-//!
-//! Returns a [`PolynomialChaos`] with `coefficients` and
-//! `multi_indices` aligned across the *full* candidate basis —
-//! pruned columns get coefficient `0.0`. This keeps the structural
-//! contract with [`crate::pce::sobol_indices_from_pce`] identical
-//! to the full-OLS path; a follow-up may compact the representation.
+//! At step `k`, correlation scans, OLS refits, and leverage calculations
+//! cost `O(N P + N k² + k³)`, where `P` is the candidate basis size.
+//! The candidate matrix occupies `O(N P)` memory. Returned coefficients
+//! cover the full candidate basis; unselected terms have coefficient zero.
 
 #![allow(
     clippy::similar_names,
@@ -82,24 +68,21 @@ use ndarray::Array2;
 use ndarray::ArrayView2;
 
 use crate::multi_index::{enumerate_hyperbolic, enumerate_total_degree, MultiIndex};
-use crate::pce::{PceError, PolynomialChaos};
+use crate::pce::{validate_finite_data, PceError, PolynomialChaos};
 use crate::polynomial::{evaluate, is_in_canonical_domain, PolynomialFamily};
 
 /// Basis truncation scheme for sparse PCE.
-///
-/// `#[non_exhaustive]` — additional schemes (e.g., adaptive
-/// degree-by-degree per Blatman 2009 § 4) land non-breaking.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum TruncationScheme {
-    /// `|α| = Σ αⱼ ≤ max_degree`. The default.
+    /// `|α| = Σ αⱼ ≤ max_degree`.
     TotalDegree,
-    /// Hyperbolic q-norm: `(Σ αⱼ^q)^{1/q} ≤ max_degree`,
+    /// Hyperbolic quasi-norm: `(Σ αⱼ^q)^{1/q} ≤ max_degree`,
     /// `q ∈ (0, 1]`. At `q = 1` reduces to total-degree; at `q < 1`
     /// favors low-interaction terms.
     Hyperbolic {
-        /// Hyperbolic norm exponent, in `(0,1]` for valid truncation.
+        /// Hyperbolic truncation exponent, in `(0,1]` for valid truncation.
         q: f64,
     },
 }
@@ -111,16 +94,13 @@ pub enum TruncationScheme {
 pub enum SparseSolver {
     /// Orthogonal Matching Pursuit.
     Omp,
-    /// Least Angle Regression (Efron 2004).
+    /// Equiangular selection with OLS refits. See module limitations.
     Lars,
 }
 
 /// Diagnostic carried through the fit. Not part of
 /// [`PolynomialChaos`] so the existing analysis surface stays
 /// untouched.
-///
-/// `#[non_exhaustive]` — future fields (per-step LOO trace,
-/// equiangular-vector norms) land non-breaking.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
@@ -129,12 +109,12 @@ pub struct SparseFitDiagnostic {
     pub solver: SparseSolver,
     /// Truncation scheme used.
     pub truncation: TruncationScheme,
-    /// Number of non-zero coefficients in the final fit.
+    /// Number of selected basis terms, including the constant term.
     pub num_active: usize,
     /// Total candidate basis size before sparse selection.
     pub candidate_basis_size: usize,
-    /// Final LOO-CV error (the minimum found during forward
-    /// selection — i.e., the model returned).
+    /// Lowest finite PRESS score found during selection, in squared-output
+    /// units. Near-unit leverage invalidates an entire candidate; see module docs.
     pub loo_error: f64,
     /// Step at which the minimum LOO was reached (zero-indexed).
     pub best_step: usize,
@@ -144,8 +124,10 @@ pub struct SparseFitDiagnostic {
 ///
 /// Same `samples_canonical` / `families` / `max_degree` contract as
 /// [`crate::pce::fit_full_pce`]. `max_terms` caps the active set
-/// size; if `None`, defaults to `min(N - 1, basis_size)` (the OLS
-/// well-posedness limit).
+/// size; if `None`, defaults to `min(N - 1, basis_size)`.
+/// This leaves residual degrees of freedom but does not guarantee a
+/// full-rank or well-conditioned design matrix. LARS stops before a tied
+/// group that would exceed the cap, so it can return fewer terms.
 ///
 /// # Errors
 ///
@@ -155,6 +137,9 @@ pub struct SparseFitDiagnostic {
 ///   even a constant via OLS (`N < 2`).
 /// - [`PceError::SingularDesignMatrix`] if the active-set Gram matrix
 ///   becomes singular (collinearity in the chosen subset).
+/// - [`PceError::UndefinedLooError`] if no candidate has a finite PRESS score.
+/// - [`PceError::NonFiniteInput`] if a sample or response is not finite.
+/// - [`PceError::NonFiniteFit`] if basis evaluation or fitting overflows.
 pub fn fit_sparse_pce(
     samples_canonical: ArrayView2<'_, f64>,
     y: &[f64],
@@ -184,6 +169,8 @@ pub fn fit_sparse_pce(
     if n < 2 {
         return Err(PceError::InsufficientSamples { n, basis_size: 1 });
     }
+
+    validate_finite_data(samples_canonical, y)?;
 
     // Caller-side canonical-domain debug-assert (mirrors fit_full_pce).
     #[cfg(debug_assertions)]
@@ -220,6 +207,9 @@ pub fn fit_sparse_pce(
             }
             psi[(i, j)] = value;
         }
+    }
+    if psi.iter().any(|value| !value.is_finite()) {
+        return Err(PceError::NonFiniteFit);
     }
     let y_vec = DVector::from_iterator(n, y.iter().copied());
 
@@ -273,7 +263,7 @@ fn omp_forward_select(
     y: &DVector<f64>,
     max_terms: usize,
 ) -> Result<(Vec<usize>, DVector<f64>, ForwardSelectDiag), PceError> {
-    let n = psi.nrows();
+    let standardized = centered_unit_predictors(psi)?;
 
     // The constant column (index 0 in our enumeration) is always
     // active — every PCE has a mean term. Initialize there.
@@ -316,7 +306,7 @@ fn omp_forward_select(
         }
 
         // Pick the inactive column most correlated with residual.
-        let next_idx = match best_inactive_correlation(psi, &residual, &active) {
+        let next_idx = match best_inactive_correlation(&standardized, &residual, &active) {
             Some(j) => j,
             None => break,
         };
@@ -337,11 +327,8 @@ fn omp_forward_select(
         }
     }
 
-    // Defensive: zero-size active set or all-failures means fall back
-    // to constant fit (mean of y).
-    if best_active.is_empty() {
-        best_active = vec![0];
-        best_beta = DVector::from_iterator(1, [y.iter().sum::<f64>() / n as f64]);
+    if !best_loo.is_finite() {
+        return Err(PceError::UndefinedLooError);
     }
     Ok((
         best_active,
@@ -358,14 +345,9 @@ fn omp_forward_select(
 /// and the diagnostic.
 ///
 /// Efron 2004 eq. (1.1) standardizes columns to unit `ℓ²` norm and
-/// centers `y`. Our PCE basis has natively-orthogonal-but-not-unit-
-/// norm columns (`||Ψ_α|| ≈ √(N · ⟨Ψ_α, Ψ_α⟩)`), so the equiangular
-/// geometry is wrong without rescaling. We standardize internally
-/// for path-following only — column selection, equiangular vector,
-/// step sizes — then refit OLS on the *un-standardized* columns at
-/// each step end (the LARS-OLS hybrid Blatman 2009 § 3.4 advocates).
-/// Coefficients returned are in the un-standardized (PCE-natural)
-/// scale.
+/// centers both the response and predictor columns. OLS refits use
+/// the original columns and a constant term, so
+/// the returned coefficients retain the polynomial family's scale.
 fn lars_forward_select(
     psi: &DMatrix<f64>,
     y: &DVector<f64>,
@@ -385,17 +367,7 @@ fn lars_forward_select(
     let y_mean = y.iter().sum::<f64>() / n as f64;
     let y_centered = y.map(|v| v - y_mean);
 
-    // Per-column ℓ² norms for j ≥ 1; column 0 (constant) is excluded.
-    let mut col_norms = vec![1.0_f64; p];
-    for j in 1..p {
-        col_norms[j] = psi.column(j).norm();
-        if col_norms[j] < 1e-14 {
-            // A degenerate-zero column (all samples at a polynomial
-            // root) shouldn't happen in practice but if it does, give
-            // it a sentinel norm so divisions don't NaN.
-            col_norms[j] = 1.0;
-        }
-    }
+    let standardized = centered_unit_predictors(psi)?;
 
     // The constant column always lives in `active` (un-standardized
     // pool index 0); the LARS path operates on standardized columns
@@ -451,42 +423,44 @@ fn lars_forward_select(
         // skipped). We allocate a length-p vector and zero out j = 0.
         let mut c = DVector::<f64>::zeros(p);
         for j in 1..p {
-            c[j] = psi.column(j).dot(&residual) / col_norms[j];
+            c[j] = standardized.column(j).dot(&residual);
         }
 
-        // Pick next column: max |c[j]| among j ∉ active_lars.
+        // At each knot, admit all maximally correlated inactive columns
+        // together (Efron Eq. 2.9). Ignoring a zero-length joining step
+        // lets a tied column lag behind and changes the following knot.
         let active_lars_set: std::collections::HashSet<usize> =
             active_lars.iter().copied().collect();
-        let next_idx = {
-            let mut best: Option<(usize, f64)> = None;
-            for j in 1..p {
-                if active_lars_set.contains(&j) {
-                    continue;
-                }
-                let v = c[j].abs();
-                if v.is_finite() && best.is_none_or(|(_, prev)| v > prev) {
-                    best = Some((j, v));
-                }
-            }
-            match best {
-                Some((j, v)) if v > 1e-14 => j,
-                _ => break,
-            }
-        };
-        active_lars.push(next_idx);
-        active.push(next_idx);
+        let max_inactive = (1..p)
+            .filter(|j| !active_lars_set.contains(j))
+            .map(|j| c[j].abs())
+            .filter(|value| value.is_finite())
+            .fold(0.0_f64, f64::max);
+        if max_inactive <= 1e-14 {
+            break;
+        }
+        let tie_tolerance = 64.0 * f64::EPSILON * max_inactive;
+        let joining: Vec<usize> = (1..p)
+            .filter(|j| !active_lars_set.contains(j))
+            .filter(|&j| (c[j].abs() - max_inactive).abs() <= tie_tolerance)
+            .collect();
+        // Splitting a tie merely because of a term cap would make the
+        // fit depend on factor order. Retain the previous best instead.
+        if joining.len() > max_terms - active.len() {
+            break;
+        }
+        active_lars.extend(joining.iter().copied());
+        active.extend(joining);
 
         // Build sign-flipped standardized active matrix X̃_A.
-        // s_j = sign(c[j]) using the c computed *before* adding
-        // next_idx (so next_idx's sign comes from its own current
-        // correlation).
+        // s_j = sign(c[j]) from the correlations at the joining knot.
         let signs: Vec<f64> = active_lars
             .iter()
             .map(|&j| if c[j] >= 0.0 { 1.0 } else { -1.0 })
             .collect();
         let mut psi_a_std_signed = DMatrix::<f64>::zeros(n, active_lars.len());
         for (col, (&j, &s)) in active_lars.iter().zip(signs.iter()).enumerate() {
-            let v = psi.column(j).clone_owned() * (s / col_norms[j]);
+            let v = standardized.column(j).clone_owned() * s;
             psi_a_std_signed.set_column(col, &v);
         }
 
@@ -508,8 +482,7 @@ fn lars_forward_select(
 
         // a = X̃ᵀ u_A — but only j ∉ active_lars matters for the step.
         // Recompute c_max (the active-set absolute correlation) from
-        // the LARS-internal pool, *after* adding next_idx (so it
-        // matches the new max).
+        // the LARS-internal pool after admitting the joining group.
         let c_max: f64 = active_lars
             .iter()
             .map(|&j| c[j].abs())
@@ -522,7 +495,7 @@ fn lars_forward_select(
             if active_lars_set2.contains(&j) {
                 continue;
             }
-            let aj = psi.column(j).dot(&u_a) / col_norms[j];
+            let aj = standardized.column(j).dot(&u_a);
             for &candidate in &[(c_max - c[j]) / (a_a - aj), (c_max + c[j]) / (a_a + aj)] {
                 if candidate > 1e-12 && candidate < gamma_hat {
                     gamma_hat = candidate;
@@ -541,6 +514,9 @@ fn lars_forward_select(
         mu += gamma_hat * &u_a;
     }
 
+    if !best_loo.is_finite() {
+        return Err(PceError::UndefinedLooError);
+    }
     Ok((
         best_active,
         best_beta,
@@ -549,6 +525,27 @@ fn lars_forward_select(
             best_step,
         },
     ))
+}
+
+/// Efron Eq. 1.1: center predictors and scale to unit Euclidean length.
+/// The intercept and degenerate constant predictors remain zero columns.
+/// OLS continues to use the original matrix so polynomial coefficients
+/// retain their original units.
+fn centered_unit_predictors(psi: &DMatrix<f64>) -> Result<DMatrix<f64>, PceError> {
+    let mut standardized = DMatrix::zeros(psi.nrows(), psi.ncols());
+    for j in 1..psi.ncols() {
+        let column = psi.column(j);
+        let mean = column.iter().sum::<f64>() / psi.nrows() as f64;
+        let centered = column.map(|value| value - mean);
+        let norm = centered.norm();
+        if !mean.is_finite() || !norm.is_finite() {
+            return Err(PceError::NonFiniteFit);
+        }
+        if norm > 0.0 {
+            standardized.set_column(j, &(centered / norm));
+        }
+    }
+    Ok(standardized)
 }
 
 /// Stack the columns of `psi` indexed by `active` into a dense
@@ -565,8 +562,15 @@ fn active_columns(psi: &DMatrix<f64>, active: &[usize]) -> DMatrix<f64> {
 fn solve_ols(psi_a: &DMatrix<f64>, y: &DVector<f64>) -> Result<DVector<f64>, PceError> {
     let xtx = psi_a.transpose() * psi_a;
     let xty = psi_a.transpose() * y;
+    if xtx.iter().chain(xty.iter()).any(|value| !value.is_finite()) {
+        return Err(PceError::NonFiniteFit);
+    }
     let cholesky = xtx.cholesky().ok_or(PceError::SingularDesignMatrix)?;
-    Ok(cholesky.solve(&xty))
+    let beta = cholesky.solve(&xty);
+    if beta.iter().any(|value| !value.is_finite()) {
+        return Err(PceError::NonFiniteFit);
+    }
+    Ok(beta)
 }
 
 /// OLS coefficients + hat-matrix diagonal for the active set. The
@@ -580,8 +584,14 @@ fn refit_active_ols(
     let psi_a = active_columns(psi, active);
     let xtx = psi_a.transpose() * &psi_a;
     let xty = psi_a.transpose() * y;
+    if xtx.iter().chain(xty.iter()).any(|value| !value.is_finite()) {
+        return Err(PceError::NonFiniteFit);
+    }
     let cholesky = xtx.cholesky().ok_or(PceError::SingularDesignMatrix)?;
     let beta = cholesky.solve(&xty);
+    if beta.iter().any(|value| !value.is_finite()) {
+        return Err(PceError::NonFiniteFit);
+    }
 
     // Hat-matrix diagonal: h_ii = ψᵢᵀ (XᵀX)⁻¹ ψᵢ. Per row, solve
     // (XᵀX) z = ψᵢ, then h_ii = ψᵢ · z.
@@ -607,23 +617,22 @@ fn loo_error_from_hat(
     let yhat = &psi_a * beta;
     let n = y.len();
     let mut acc = 0.0_f64;
-    let mut effective_n = 0_usize;
     for i in 0..n {
         let denom = 1.0 - hat_diag[i];
-        // Guard the singular-row case: hᵢᵢ ≈ 1 means `Ψ_A` perfectly
-        // determines yᵢ, so leave-one-out residual is undefined.
-        // Skip from the average rather than diverging.
-        if denom.abs() < 1e-10 {
-            continue;
+        // Removing a leverage-one row leaves a singular OLS design.
+        // Penalize the whole candidate, rather than hiding that row.
+        if !denom.is_finite() || denom <= 1e-10 {
+            return f64::INFINITY;
         }
         let resid = y[i] - yhat[i];
         acc += (resid / denom).powi(2);
-        effective_n += 1;
     }
-    if effective_n == 0 {
-        return f64::INFINITY;
+    let error = acc / n as f64;
+    if error.is_finite() {
+        error
+    } else {
+        f64::INFINITY
     }
-    acc / effective_n as f64
 }
 
 /// Pick the inactive column index with the largest absolute inner
@@ -674,6 +683,241 @@ mod tests {
             }
         }
         x
+    }
+
+    // Efron et al. (2004), Eqs. 1.1 and 2.13: for orthogonal unit
+    // predictors and y=3a+2b+0.5c, correlations are sqrt(8)*(3,2,0.5).
+    // The first knot is gamma=(3-2)*sqrt(8), where b joins a.
+    // Thus the first two nonconstant columns must be a, then b,
+    // regardless of the predictors' means or units. OLS retains raw units.
+    fn orthogonal_path_fixture() -> (DMatrix<f64>, DVector<f64>) {
+        let a = [1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0];
+        let b = [1.0, 1.0, -1.0, -1.0, 1.0, 1.0, -1.0, -1.0];
+        let c = [1.0, 1.0, 1.0, 1.0, -1.0, -1.0, -1.0, -1.0];
+        let psi = DMatrix::from_fn(8, 4, |i, j| match j {
+            0 => 1.0,
+            1 => 20.0 + a[i],
+            2 => b[i],
+            _ => c[i],
+        });
+        let y = DVector::from_fn(8, |i, _| 3.0 * a[i] + 2.0 * b[i] + 0.5 * c[i]);
+        (psi, y)
+    }
+
+    #[test]
+    fn lars_path_matches_orthogonal_analytic_knots() {
+        let (psi, y) = orthogonal_path_fixture();
+        let (active, beta, _) = lars_forward_select(&psi, &y, 2).unwrap();
+        assert_eq!(active, vec![0, 1]);
+        assert!((beta[0] + 60.0).abs() < 1e-10);
+        assert!((beta[1] - 3.0).abs() < 1e-10);
+        let (active, beta, _) = lars_forward_select(&psi, &y, 3).unwrap();
+        assert_eq!(active, vec![0, 1, 2]);
+        assert!((beta[2] - 2.0).abs() < 1e-10);
+        let mut transformed = psi.clone();
+        for i in 0..8 {
+            transformed[(i, 1)] = -2.0 * psi[(i, 1)] + 7.0;
+            transformed[(i, 2)] = 0.25 * psi[(i, 2)] - 3.0;
+        }
+        let (changed, _, _) = lars_forward_select(&transformed, &y, 3).unwrap();
+        assert_eq!(changed, active);
+    }
+
+    #[test]
+    fn lars_tied_knots_admit_all_maximal_correlations_before_moving() {
+        // Efron Eq.2.9 admits both a,b at the initial knot. Their bisector
+        // has z projection .32/sqrt(2), vs A=1/sqrt(2). In units of the
+        // common a,b coefficient increment, z joins at (1-c_z)/.68 ~.3925.
+        // Its joining correlation ~.6075 exceeds |c_c|=.43, so z joins first.
+        let walsh = |i: usize, j: usize| if (i >> j) & 1 == 0 { 1.0 } else { -1.0 };
+        let zcoef = (1.0_f64 - 0.36_f64.powi(2) - 0.04_f64.powi(2) - 0.65_f64.powi(2)).sqrt();
+        let fixture = Array2::from_shape_fn((64, 4), |(i, j)| {
+            if j < 3 {
+                walsh(i, j)
+            } else {
+                (0.36 * walsh(i, 0) - 0.04 * walsh(i, 1) - 0.65 * walsh(i, 2) - zcoef * walsh(i, 3))
+                    / 2.0
+            }
+        });
+        let y: Vec<_> = (0..64)
+            .map(|i| walsh(i, 0) + walsh(i, 1) - 0.43 * walsh(i, 2) - 0.2 * walsh(i, 3))
+            .collect();
+        let fit = |permutation: [usize; 4]| {
+            let x = Array2::from_shape_fn((64, 4), |(i, j)| fixture[[i, permutation[j]]]);
+            let (pce, diagnostic) = fit_sparse_pce(
+                x.view(),
+                &y,
+                &[PolynomialFamily::Legendre; 4],
+                1,
+                TruncationScheme::TotalDegree,
+                SparseSolver::Lars,
+                Some(4),
+            )
+            .unwrap();
+            let mut support: Vec<_> = pce
+                .multi_indices
+                .iter()
+                .zip(&pce.coefficients)
+                .filter(|(alpha, coefficient)| !alpha.is_zero() && coefficient.abs() > 1e-9)
+                .map(|(alpha, _)| permutation[alpha.active_factors()[0]])
+                .collect();
+            support.sort_unstable();
+            assert_eq!(support, vec![0, 1, 3]);
+            assert_eq!(diagnostic.num_active, 4);
+            (pce, diagnostic, permutation)
+        };
+        let (original, diagnostic, _) = fit([0, 1, 2, 3]);
+        let (permuted, changed, permutation) = fit([1, 0, 2, 3]);
+        assert!((diagnostic.loo_error - changed.loo_error).abs() < 1e-12);
+        for row in fixture.rows() {
+            let physical = row.to_vec();
+            let reordered: Vec<_> = permutation.iter().map(|&j| physical[j]).collect();
+            assert!((original.evaluate(&physical) - permuted.evaluate(&reordered)).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn lars_stops_before_tie_group_that_exceeds_term_limit() {
+        let (psi, _) = orthogonal_path_fixture();
+        let y = DVector::from_fn(8, |i, _| psi[(i, 1)] - 20.0 + psi[(i, 2)]);
+        let (active, _, _) = lars_forward_select(&psi, &y, 2).unwrap();
+        // Splitting the a,b tie would choose an arbitrary basis coordinate.
+        assert_eq!(active, vec![0]);
+    }
+
+    #[test]
+    fn lars_correlated_predictor_path_matches_equiangular_oracle() {
+        // a,b,c are orthogonal mean-zero +/-1 columns; the second predictor
+        // is z=0.8a+0.6b, and y=3a+0.5b+c. Unit-length correlations are
+        // sqrt(N)*(3,2.7,1). Eq.2.13 gives first knot gamma=1.5sqrt(N):
+        // z joins a before c. Greedy OMP fits a fully, leaving correlations
+        // proportional to (0.3,1), so it chooses c instead of z.
+        // Replication keeps PRESS from rejecting the analytically chosen
+        // two-predictor model solely for its extra leverage.
+        let (base, _) = orthogonal_path_fixture();
+        let psi = DMatrix::from_fn(32, 4, |i, j| {
+            let a = base[(i % 8, 1)] - 20.0;
+            let b = base[(i % 8, 2)];
+            let c = base[(i % 8, 3)];
+            match j {
+                0 => 1.0,
+                1 => 10.0 + a,
+                2 => 5.0 + 0.8 * a + 0.6 * b,
+                _ => -3.0 + c,
+            }
+        });
+        let y = DVector::from_fn(32, |i, _| {
+            3.0 * (base[(i % 8, 1)] - 20.0) + 0.5 * base[(i % 8, 2)] + base[(i % 8, 3)]
+        });
+        let (active, beta, _) = lars_forward_select(&psi, &y, 3).unwrap();
+        assert_eq!(active, vec![0, 1, 2]);
+        assert!((beta[1] - 7.0 / 3.0).abs() < 1e-10);
+        assert!((beta[2] - 5.0 / 6.0).abs() < 1e-10);
+        let (omp_active, _, _) = omp_forward_select(&psi, &y, 3).unwrap();
+        assert_eq!(omp_active, vec![0, 1, 3]);
+    }
+
+    #[test]
+    fn omp_selection_is_invariant_to_column_units() {
+        let (mut psi, y) = orthogonal_path_fixture();
+        let (active, _, _) = omp_forward_select(&psi, &y, 2).unwrap();
+        assert_eq!(active, vec![0, 1]);
+        for i in 0..8 {
+            psi[(i, 2)] = 100.0 * psi[(i, 2)] + 10.0;
+        }
+        let (changed, _, _) = omp_forward_select(&psi, &y, 2).unwrap();
+        assert_eq!(changed, active);
+    }
+
+    #[test]
+    fn sparse_fit_rejects_nonfinite_inputs_and_outputs() {
+        for solver in [SparseSolver::Omp, SparseSolver::Lars] {
+            let mut x = linspace_unit_to_canonical(8, 1);
+            assert!(matches!(
+                fit_sparse_pce(
+                    x.view(),
+                    &[f64::NAN; 8],
+                    &[PolynomialFamily::Legendre],
+                    1,
+                    TruncationScheme::TotalDegree,
+                    solver,
+                    None
+                ),
+                Err(PceError::NonFiniteInput)
+            ));
+            x[[0, 0]] = f64::INFINITY;
+            assert!(matches!(
+                fit_sparse_pce(
+                    x.view(),
+                    &[1.0; 8],
+                    &[PolynomialFamily::Legendre],
+                    1,
+                    TruncationScheme::TotalDegree,
+                    solver,
+                    None
+                ),
+                Err(PceError::NonFiniteInput)
+            ));
+        }
+    }
+
+    #[test]
+    fn sparse_fit_errors_when_every_press_candidate_is_invalid() {
+        let x = linspace_unit_to_canonical(8, 1);
+        // Finite data, but every candidate's squared prediction error overflows.
+        let y: Vec<_> = (0..8)
+            .map(|i| if i & 1 == 0 { 1e200 } else { -1e200 })
+            .collect();
+        for solver in [SparseSolver::Omp, SparseSolver::Lars] {
+            assert!(matches!(
+                fit_sparse_pce(
+                    x.view(),
+                    &y,
+                    &[PolynomialFamily::Legendre],
+                    1,
+                    TruncationScheme::TotalDegree,
+                    solver,
+                    None
+                ),
+                Err(PceError::UndefinedLooError)
+            ));
+        }
+    }
+
+    #[test]
+    fn press_matches_explicit_leave_one_out_refits() {
+        let psi = DMatrix::from_fn(6, 2, |i, j| if j == 0 { 1.0 } else { i as f64 });
+        let y = DVector::from_vec(vec![0.0, 0.5, 3.0, 2.0, 4.5, 7.0]);
+        let active = [0, 1];
+        let (beta, hat) = refit_active_ols(&psi, &y, &active).unwrap();
+        let press = loo_error_from_hat(&psi, &y, &active, &beta, &hat);
+        let mut deletion_error = 0.0;
+        for omitted in 0..6 {
+            let rows: Vec<_> = (0..6).filter(|&i| i != omitted).collect();
+            let training = DMatrix::from_fn(5, 2, |i, j| psi[(rows[i], j)]);
+            let response = DVector::from_fn(5, |i, _| y[rows[i]]);
+            let fit = solve_ols(&training, &response).unwrap();
+            let prediction = psi.row(omitted).transpose().dot(&fit);
+            deletion_error += (y[omitted] - prediction).powi(2);
+        }
+        assert!((press - deletion_error / 6.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn press_invalidates_whole_candidate_when_one_deletion_is_singular() {
+        // Leaving out row 0 destroys the only observation of predictor 1.
+        // The other three deletion fits are valid; omitting only row 0 from
+        // PRESS would conceal this undefined part of the full diagnostic.
+        let psi = DMatrix::from_row_slice(4, 2, &[1.0, 1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0]);
+        let y = DVector::from_vec(vec![4.0, 0.0, 1.0, 2.0]);
+        let (beta, hat) = refit_active_ols(&psi, &y, &[0, 1]).unwrap();
+        assert!((hat[0] - 1.0).abs() < 1e-12);
+        let deletion = psi.rows(1, 3).into_owned();
+        assert!(solve_ols(&deletion, &y.rows(1, 3).into_owned()).is_err());
+        assert_eq!(
+            loo_error_from_hat(&psi, &y, &[0, 1], &beta, &hat),
+            f64::INFINITY
+        );
     }
 
     // ── Validation ────────────────────────────────────────────────

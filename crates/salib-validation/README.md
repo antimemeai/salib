@@ -1,10 +1,8 @@
 # salib-validation
 
-Analytic reference models and closed-form sensitivity indices for testing and
-benchmarking. Depend on this crate directly as a development dependency when
-checking an estimator or integration against known answers. Application analyses
-usually use their own model; the `salib` facade exposes these references through
-its optional `validation` feature.
+Test models with known sensitivity indices. Add this crate as a development
+dependency to check an estimator against analytic results, or enable the
+`validation` feature on `salib`.
 
 | API | Purpose |
 |---|---|
@@ -28,13 +26,12 @@ assert_eq!(ishigami::ishigami(&[0.0, 0.0, 0.0]), 0.0);
 
 ```toml
 [dev-dependencies]
-salib-validation = "0.2"
+salib-validation = "0.3"
 ```
 
-Use the canonical input distributions when comparing indices. Agreement should
-be assessed within justified sampling tolerances; analytic targets are not exact
-expected floating-point outputs from a finite sample. The Morris references
-here are additive fixtures, not the full original 20-factor Morris function.
+Use each model's specified input distributions when comparing indices, and
+allow for sampling error. The Morris test models here are additive; they do
+not implement the original 20-factor Morris function.
 `serde` serializes analytic result types.
 
 [API reference](https://docs.rs/salib-validation/latest/salib_validation/).

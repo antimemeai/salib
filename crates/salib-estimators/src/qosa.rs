@@ -1,85 +1,55 @@
-//! Quantile-Oriented Sensitivity Analysis (QOSA, Maume-Deschamps &
-//! Niang 2018) — partition-based estimator.
+//! Quantile-oriented sensitivity analysis (QOSA) using a
+//! partition-based approximation.
 //!
-//! # What QOSA measures
+//! # Population index
 //!
-//! Variance-based first-order Sobol' answers "which input drives
-//! `Var(Y)`?". QOSA answers a different question: **"which input
-//! drives the α-quantile of Y?"** — useful when the workload cares
-//! about tail behavior (e.g. 95th-percentile latency, 99th-percentile
-//! loss, regulatory VaR-style measures).
-//!
-//! Maume-Deschamps & Niang 2018 derive QOSA from the α-quantile
-//! contrast function `ψ_α(y, θ) = (y − θ)(α − 1_{y≤θ})`. The
-//! resulting index (Eq 2.3):
+//! QOSA measures the relative reduction in expected quantile loss
+//! when an input is known. For `ψ_α(y, θ) = (y − θ)(α − 1_{y≤θ})`,
 //!
 //! ```text
-//! S^α_X_i = (min_θ E[ψ_α(Y;θ)] − E[min_θ E[ψ_α(Y;θ)|X_i]])
-//!         / min_θ E[ψ_α(Y;θ)]
+//! S_i^α = 1 − E[min_θ E[ψ_α(Y, θ) | X_i]] / min_θ E[ψ_α(Y, θ)].
 //! ```
 //!
-//! is rewritten via the Conditional Tail Expectation (CTE) risk
-//! measure (Prop 3.1):
+//! The index lies in `[0, 1]` when the denominator is positive and
+//! the expectations exist. Independence gives zero; an input that
+//! determines the output gives one. Changing `α` can change factor
+//! rankings. Rankings need not agree with Sobol' indices at `α = 0.5`.
+//!
+//! [Maume-Deschamps and Niang (2018)](https://doi.org/10.1016/j.spl.2017.10.019)
+//! express the index through conditional tail expectations:
 //!
 //! ```text
-//! S^α_X_i = 1 − (E[Y | Y > F_{Y|X_i}^{-1}(α)] − E[Y])
-//!             / (CTE_α(Y) − E[Y])
+//! S_i^α = 1 − (E[Y | Y > q_α(Y|X_i)] − E[Y])
+//!             / (CTE_α(Y) − E[Y]).
 //! ```
 //!
-//! where `CTE_α(Y) = E[Y | Y > F_Y^{-1}(α)]` is the tail mean and
-//! `F_{Y|X_i}^{-1}(α)` is the conditional α-quantile.
+//! This identity uses tail probability `1 − α`. It requires the
+//! relevant marginal and conditional distributions to have no atom
+//! at their quantiles, together with a finite first moment and a
+//! nonzero denominator. The contrast definition above also covers
+//! cases for which this strict-tail expression is unsuitable.
 //!
-//! Sanity properties (Maume-Deschamps & Niang 2018 § 2 Remark):
+//! # Implemented approximation and limitations
 //!
-//! - `S^α_X_i = 0` if `Y ⊥ X_i` (X_i has no influence on the
-//!   α-quantile of Y).
-//! - `S^α_X_i = 1` if `Y` is `X_i`-measurable (X_i fully determines Y).
+//! The paper estimates conditional quantiles with kernels and uses
+//! two independent samples. This implementation instead minimizes
+//! empirical pinball loss globally and within input classes using
+//! the same observations for fitting and evaluation. It therefore
+//! is not the paper's estimator. In-sample fitting can bias the
+//! estimated loss reduction upward.
 //!
-//! # Estimator — partition-based
+//! Quantiles use the `ceil(alpha * class_size)`-th order statistic.
+//! The loss formulation handles atoms and is invariant to output
+//! translation and positive scaling, subject to rounding. A constant
+//! output has zero loss, so its index is undefined.
 //!
-//! Maume-Deschamps & Niang 2018 § 4 propose a kernel-based two-
-//! sample estimator (Eq 4.3) using `F_Y^{-1}(α)` and a kernel-
-//! conditional-quantile `F_{Y|X_i=x}^{-1}(α)`. This module ships a
-//! **partition-based** alternative that fits the existing saltelli
-//! given-data machinery (PR 11 [`crate::borgonovo`], PR 14b
-//! [`crate::given_data_sobol`]):
-//!
-//! 1. Sort `Y` and take `θ̂* = ⌈α·N⌉`-th value (empirical α-quantile).
-//! 2. Compute global `Ȳ` and `CTE_α(Y) = (1/(N(1−α))) Σⱼ Yⱼ · 1_{Yⱼ > θ̂*}`.
-//! 3. For each factor `i`:
-//!    a. Partition `X_i` into `K` ordinal classes (same heuristic as
-//!       `borgonovo::class_count`).
-//!    b. For each class, take the conditional α-quantile θ̂_class.
-//!    c. Compute `Ê[Y | Y > F_{Y|X_i}^{-1}(α)] ≈
-//!       (1/(N(1−α))) Σⱼ Yⱼ · 1_{Yⱼ > θ̂_class(j)}` where
-//!       `class(j)` is the class of `X_i^j`.
-//!    d. `Ŝ^α_i = 1 − (Ê[Y | …] − Ȳ) / (CTE_α(Y) − Ȳ)` per Prop 3.1.
-//!    e. Clamp to `[0, 1]` (population value is non-negative; finite-
-//!       sample noise can push slightly outside).
-//!
-//! The partition variant trades the kernel estimator's continuous-
-//! conditional-quantile fit for a piecewise-constant ordinal-class
-//! approximation. Asymptotically the two converge to the same
-//! population index (Prop 4.1 carries through under partition
-//! consistency); finite-sample bias on the partition variant is
-//! bounded by class-mean variance, controlled by `class_count`.
-//!
-//! # Sanity at α = 0.5
-//!
-//! At α = 0.5, QOSA measures sensitivity at the median tail. The
-//! estimator does *not* reduce exactly to first-order Sobol'
-//! (which uses `Var` not CTE), but they agree on factor ordering
-//! for monotone or near-monotone effects. For Ishigami canonical
-//! we verify QOSA at α = 0.5 places `X_2` (largest first-order
-//! Sobol' factor) above `X_1` (second) above `X_3` (≈ 0).
-//!
-//! # Out of scope
-//!
-//! - Kernel-conditional-quantile two-sample estimator (the paper's
-//!   Eq 4.3 form). Bead-eligible if a workload demonstrates the
-//!   partition variant has insufficient resolution.
-//! - Cross-implementation differential against the paper authors'
-//!   reference R code.
+//! Tied input values stay together, assigned by their sorted rank
+//! block midpoint. Empty classes are omitted. A constant input gives
+//! one class and zero index. Class count uses [`crate::borgonovo`]'s
+//! heuristic, capped at 48. The cap leaves conditioning error as
+//! sample size grows; the paper's consistency result does not cover
+//! this estimator. Check sample-size and partition sensitivity rather
+//! than assuming more observations remove all approximation error.
 
 #![allow(
     clippy::cast_precision_loss,
@@ -101,27 +71,27 @@ use ndarray::Array2;
 use ndarray::ArrayView2;
 use salib_core::tree_sum;
 
-use crate::borgonovo::{class_count, ordinal_ranks};
+use crate::borgonovo::class_count;
+use crate::conditioning::classes;
 
 /// QOSA index estimates for a fixed α.
-///
-/// `#[non_exhaustive]` — future fields (`bootstrap_ci`, per-factor
-/// realized class count) land non-breaking.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct QosaIndices {
-    /// QOSA index per factor, length `d`. Clamped to `[0, 1]`
-    /// (population value is non-negative under Maume-Deschamps
-    /// 2018 § 2 Remark; finite-sample noise can push slightly
-    /// outside, hence the clamp).
+    /// QOSA estimate per factor, length `d`, clamped to `[0, 1]`.
+    /// Clamping handles rounding, not sampling or partition error.
     pub s: Vec<f64>,
     /// Quantile level α used for the estimate. Echo of input.
     pub alpha: f64,
     /// Empirical α-quantile of the marginal output. Diagnostic.
     pub global_quantile: f64,
-    /// Empirical CTE_α(Y) = E[Y | Y > F_Y^{-1}(α)]. Diagnostic.
+    /// Empirical expected shortfall: `q + mean((Y-q)_+) / (1-alpha)`.
+    /// This assigns fractional mass at the quantile when the empirical
+    /// distribution has an atom, rather than averaging only strict-tail rows.
     pub global_cte: f64,
+    /// Minimum empirical mean pinball loss; the index denominator.
+    pub global_loss: f64,
 }
 
 impl QosaIndices {
@@ -159,6 +129,20 @@ impl fmt::Display for QosaIndices {
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum QosaError {
+    /// An input observation is NaN or infinite.
+    #[error("input at row {row}, column {column} must be finite")]
+    NonfiniteInput {
+        /// Zero-based input row.
+        row: usize,
+        /// Zero-based input column.
+        column: usize,
+    },
+    /// An output observation is NaN or infinite.
+    #[error("output at index {index} must be finite")]
+    NonfiniteOutput {
+        /// Zero-based output index.
+        index: usize,
+    },
     /// Input and output shapes are incompatible.
     #[error("qosa: shape mismatch — x has {x_rows} rows, y has {y_len} elements")]
     ShapeMismatch {
@@ -182,27 +166,25 @@ pub enum QosaError {
         /// Significance or quantile level supplied; must be finite and in `(0,1)`.
         alpha: f64,
     },
-    /// Output variance is zero or below the estimator threshold.
-    #[error("qosa: Var(Y) ≈ 0 (model output is constant)")]
+    /// Empirical quantile loss is zero or cannot be represented finitely.
+    #[error("qosa: empirical quantile loss is zero or nonfinite")]
     ZeroVariance,
-    /// The quantile contrast has no informative tail contribution.
-    #[error(
-        "qosa: degenerate tail — CTE_α(Y) ≈ E[Y]; either α is too \
-         small or Y has a heavy point mass below the α-quantile"
-    )]
+    /// Legacy strict-tail error retained for compatibility.
+    /// The pinball-loss estimator does not emit this variant.
+    #[error("qosa: degenerate strict tail (legacy estimator error)")]
     DegenerateTail,
 }
 
 /// Estimate quantile-oriented sensitivity indices on generic
-/// `(X, Y)` data via a partition-based form of Maume-Deschamps &
-/// Niang 2018 Prop 3.1.
+/// `(X, Y)` data by empirical quantile-loss reduction within classes.
 ///
 /// `x` is the `(N, d)` input matrix; `y` is the `N`-element model
 /// output. `alpha ∈ (0, 1)` is the quantile level; common choices
 /// are `0.5` (median), `0.9` / `0.95` (tail), `0.99` (extreme tail).
 ///
-/// Sampler-agnostic — works on any pair of independent `(X, Y)`
-/// observations regardless of how `X` was sampled.
+/// Rows must be aligned observations representative of the input
+/// distribution of interest. See the module documentation for
+/// in-sample fitting and partition limitations. Atomic outputs are supported.
 ///
 /// # Errors
 ///
@@ -211,9 +193,9 @@ pub enum QosaError {
 /// - [`QosaError::InsufficientSamples`] if `N < 16` (matches the
 ///   sibling given-data estimators' floor).
 /// - [`QosaError::InvalidAlpha`] if `alpha ∉ (0, 1)`.
-/// - [`QosaError::DegenerateTail`] if the global CTE collapses onto
-///   the global mean (numerically `< 1e-12 · |Ȳ| + 1e-15`); the
-///   index denominator vanishes.
+/// - [`QosaError::NonfiniteInput`] or [`QosaError::NonfiniteOutput`] for NaN/infinity.
+/// - [`QosaError::ZeroVariance`] if the minimum empirical quantile loss
+///   is zero (constant output), or nonfinite from numerical overflow.
 pub fn estimate_qosa(
     x: ArrayView2<'_, f64>,
     y: &[f64],
@@ -237,99 +219,56 @@ pub fn estimate_qosa(
         return Err(QosaError::InvalidAlpha { alpha });
     }
 
-    let n_f = n as f64;
-    let mean_y = tree_sum(y) / n_f;
+    if let Some(((row, column), _)) = x.indexed_iter().find(|(_, v)| !v.is_finite()) {
+        return Err(QosaError::NonfiniteInput { row, column });
+    }
+    if let Some(index) = y.iter().position(|v| !v.is_finite()) {
+        return Err(QosaError::NonfiniteOutput { index });
+    }
 
-    // Constant-Y short-circuit. The CTE-based numerator collapses
-    // (no Y_j strictly exceeds the empirical quantile) and the
-    // population sensitivity is undefined for a constant output.
-    let var_y_centered: Vec<f64> = y.iter().map(|&yj| (yj - mean_y).powi(2)).collect();
-    let var_y = tree_sum(&var_y_centered) / n_f;
-    if !var_y.is_finite() || var_y < 1e-15 {
+    let n_f = n as f64;
+    let mut y_sorted = y.to_vec();
+    y_sorted.sort_by(f64::total_cmp);
+    let global_quantile = empirical_quantile(&y_sorted, alpha);
+    let global_loss = pinball_sum(&y_sorted, global_quantile, alpha) / n_f;
+    if !global_loss.is_finite() || global_loss <= 0.0 {
         return Err(QosaError::ZeroVariance);
     }
-
-    // Global α-quantile via empirical sort. ⌈α·N⌉-th order statistic
-    // (1-indexed → α·N - 1 zero-indexed, ceiling).
-    let mut y_sorted: Vec<f64> = y.to_vec();
-    y_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let q_idx = ((alpha * n_f).ceil() as usize).saturating_sub(1).min(n - 1);
-    let global_quantile = y_sorted[q_idx];
-
-    // Global CTE via Prop 3.1 estimator: (1/(N(1-α))) Σⱼ Y_j · 1_{Y_j > θ̂*}.
-    // (We compute the sum via tree_sum for bit-reproducibility.)
-    let global_excess: Vec<f64> = y
-        .iter()
-        .map(|&yj| if yj > global_quantile { yj } else { 0.0 })
-        .collect();
-    let global_cte = tree_sum(&global_excess) / (n_f * (1.0 - alpha));
-
-    let denom = global_cte - mean_y;
-    if !denom.is_finite() || denom.abs() < 1e-12 * mean_y.abs() + 1e-15 {
-        return Err(QosaError::DegenerateTail);
+    // Average the largest empirical tail mass, with a fractional final row.
+    // Applying weights before summation avoids overflowing an excess sum.
+    let tail_mass = n_f * (1.0 - alpha);
+    let whole = tail_mass.floor() as usize;
+    let fraction = tail_mass - whole as f64;
+    let mut tail_terms = Vec::with_capacity(whole.saturating_add(1));
+    for &value in y_sorted.iter().rev().take(whole) {
+        tail_terms.push(value / tail_mass);
     }
-
+    if fraction > 0.0 && whole < n {
+        tail_terms.push(y_sorted[n - whole - 1] * (fraction / tail_mass));
+    }
+    // A convex average lies within the observed range; contain endpoint rounding.
+    let global_cte = tree_sum(&tail_terms).clamp(y_sorted[0], y_sorted[n - 1]);
     let n_classes = class_count(n);
-    let mut s = vec![0.0_f64; d];
-    let mut x_col_buf = vec![0.0_f64; n];
-    let mut class_y_buf: Vec<f64> = Vec::with_capacity(n);
-    // Per-sample assigned class index (for fast indicator lookup
-    // in the second pass).
-    let mut class_of: Vec<usize> = vec![0_usize; n];
-    let mut class_quantile = vec![0.0_f64; n_classes];
-    let mut conditional_excess = vec![0.0_f64; n];
-
+    let mut s = vec![0.0; d];
+    let mut x_col_buf = vec![0.0; n];
+    let mut class_y_buf = Vec::with_capacity(n);
     for i in 0..d {
         for k in 0..n {
             x_col_buf[k] = x[[k, i]];
         }
-        let ranks = ordinal_ranks(&x_col_buf);
-
-        // First pass: assign each sample to a class and compute the
-        // conditional α-quantile per class.
-        for j in 0..n_classes {
-            let lo = (n_f * (j as f64) / (n_classes as f64)) as usize;
-            let hi = (n_f * ((j + 1) as f64) / (n_classes as f64)) as usize;
+        let groups = classes(&x_col_buf, n_classes);
+        let mut class_losses = Vec::with_capacity(groups.len());
+        for group in groups {
             class_y_buf.clear();
-            for (k, &r) in ranks.iter().enumerate() {
-                if r > lo && r <= hi {
-                    class_y_buf.push(y[k]);
-                    class_of[k] = j;
-                }
-            }
-            class_y_buf.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            // ⌈α · class_size⌉-th order statistic.
-            let nm = class_y_buf.len();
-            class_quantile[j] = if nm == 0 {
-                f64::INFINITY // unreachable in practice with class_count(N) ≤ √N
-            } else {
-                let cq_idx = ((alpha * nm as f64).ceil() as usize)
-                    .saturating_sub(1)
-                    .min(nm - 1);
-                class_y_buf[cq_idx]
-            };
+            class_y_buf.extend(group.iter().map(|&k| y[k]));
+            class_y_buf.sort_by(f64::total_cmp);
+            let quantile = empirical_quantile(&class_y_buf, alpha);
+            class_losses.push(pinball_sum(&class_y_buf, quantile, alpha));
         }
-
-        // Second pass: compute Σⱼ Yⱼ · 1_{Yⱼ > θ̂_class(j)}.
-        //
-        // Strict inequality matches Prop 3.1's `1_{Y > F^{-1}(α)}`.
-        // Caveat: for discrete `Y` with a heavy point mass at the
-        // class quantile, ties are excluded from the tail and the
-        // conditional CTE biases low (corresponding S biases high).
-        // This is currently out of scope -
-        // eligible; the `Var(Y) < 1e-15` early check handles only
-        // the constant-Y degenerate case.
-        for k in 0..n {
-            let cq = class_quantile[class_of[k]];
-            conditional_excess[k] = if y[k] > cq { y[k] } else { 0.0 };
-        }
-        let cond_excess_sum = tree_sum(&conditional_excess);
-        let conditional_cte = cond_excess_sum / (n_f * (1.0 - alpha));
-
-        // Prop 3.1: S^α_i = 1 - (E[Y | Y > F^{-1}_{Y|X_i}(α)] - Ȳ) /
-        //                       (CTE_α(Y) - Ȳ)
-        let raw = 1.0 - (conditional_cte - mean_y) / denom;
-        s[i] = raw.clamp(0.0, 1.0);
+        let conditional_loss = tree_sum(&class_losses) / n_f;
+        // Optimizing each class separately cannot increase the in-sample loss.
+        // Clamping handles floating-point rounding at the interval endpoints.
+        s[i] = (1.0 - conditional_loss / global_loss).clamp(0.0, 1.0);
     }
 
     Ok(QosaIndices {
@@ -337,7 +276,40 @@ pub fn estimate_qosa(
         alpha,
         global_quantile,
         global_cte,
+        global_loss,
     })
+}
+
+/// A minimizing empirical alpha-quantile, including laws with atoms.
+fn empirical_quantile(sorted: &[f64], alpha: f64) -> f64 {
+    let index = ((alpha * sorted.len() as f64).ceil() as usize)
+        .saturating_sub(1)
+        .min(sorted.len() - 1);
+    sorted[index]
+}
+
+fn pinball_sum(sorted: &[f64], quantile: f64, alpha: f64) -> f64 {
+    let losses: Vec<_> = sorted
+        .iter()
+        .map(|&value| {
+            if value >= quantile {
+                weighted_difference(value, quantile, alpha)
+            } else {
+                weighted_difference(quantile, value, 1.0 - alpha)
+            }
+        })
+        .collect();
+    tree_sum(&losses)
+}
+
+/// Scale before subtraction if a finite pair's difference overflows.
+fn weighted_difference(upper: f64, lower: f64, weight: f64) -> f64 {
+    let difference = upper - lower;
+    if difference.is_finite() {
+        weight * difference
+    } else {
+        weight * upper - weight * lower
+    }
 }
 
 #[cfg(test)]
@@ -443,9 +415,8 @@ mod tests {
     #[test]
     fn fully_determining_factor_yields_index_near_one() {
         // Y = X_0 exactly. Maume-Deschamps Remark: S^α = 1 if Y is
-        // X_i-measurable. The partition-based estimator approaches
-        // 1 as N grows; at moderate N it's biased low by the
-        // class-mean smoothing.
+        // X_i-measurable. Finite input classes leave conditioning error;
+        // this fixture only checks a substantial estimate at its chosen N.
         let n = 2048;
         let x = synthetic_uniform(n, 2);
         let y: Vec<f64> = (0..n).map(|k| x[[k, 0]]).collect();

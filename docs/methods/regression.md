@@ -1,26 +1,37 @@
-# Regression-Based Methods
+# Regression methods
 
-Sensitivity indices from ordinary least squares — standardized coefficients and partial correlations on raw and rank-transformed data.
-
-> **When to use:** Your model is approximately linear (SRC, PCC) or monotonic (SRRC, PRCC). You have an existing sample set from any sampler. Very cheap — just OLS on the data. Good first pass before committing to expensive Sobol'. **Always check the $R^2$ diagnostic before trusting the indices.**
-
----
+Regression coefficients and partial correlations describe input/output
+associations on the original data or on ranks. Use them as an initial analysis
+when the response is approximately linear or monotonic. Check the fit and
+residuals before interpreting the coefficients.
 
 ## Theory
 
 ### SRC — Standardized Regression Coefficients
 
-Saltelli & Marivoet (1990) *Comp. Stat. Data Anal.* 9(1), 55--64. [[bib]](../bibliography.md#saltelli-marivoet1990)
+Saltelli & Marivoet (1990) *Reliability Engineering & System Safety* 28(2), 229–253. [paper](https://doi.org/10.1016/0951-8320%2890%2990065-U) · [reference](../bibliography.md#saltelli-marivoet1990)
 
 Fit an OLS regression $Y \approx \beta_0 + \boldsymbol{\beta} \cdot \mathbf{X}$ and standardize each coefficient by the input/output standard deviations:
 
 $$\text{SRC}_i = \beta_i \cdot \frac{\sigma_{X_i}}{\sigma_Y}$$
 
-For a truly linear model with independent inputs, $\text{SRC}_i^2 \approx S_i$ — the squared standardized coefficient recovers the first-order Sobol' index. The $R^2$ of the linear fit is the load-bearing diagnostic: if $R^2_{\text{linear}} > 0.7$, SRC indices are trustworthy; below that, the model is too nonlinear for linear regression to capture.
+For a linear model with independent inputs, squared standardized coefficients
+correspond to first-order Sobol' indices. With sampled data,
+$\text{SRC}_i^2 \approx S_i$. Check $R^2$ and residuals to judge how well the
+linear model represents the response; an $R^2$ cutoff alone cannot establish
+that its sensitivity estimates are adequate.
 
 ### SRRC — Standardized Rank Regression Coefficients
 
-Replace both $\mathbf{X}$ and $Y$ with their ordinal ranks, then compute SRC on the rank-transformed data (Spearman regression). SRRC captures monotonic nonlinear relationships — the rank transform linearizes any monotonic function. Trust if $R^2_{\text{rank}} > 0.7$.
+Replace both $\mathbf{X}$ and $Y$ with their ranks, averaging occupied ranks for tied values, then compute SRC
+on the transformed data. This can capture monotonic nonlinear associations.
+Inspect the rank regression's $R^2$ and residuals as well.
+
+Tied values receive average ranks, as described in
+[Marino et al. (2008), footnote 3](https://pmc.ncbi.nlm.nih.gov/articles/PMC2570191/).
+The balanced binary fixture in
+`cargo run -p salib-estimators --example audit_regression_ties` checks that
+independent inputs and outputs have zero association after joint row permutations.
 
 ### PCC — Partial Correlation Coefficients
 
@@ -28,17 +39,19 @@ For each factor $X_i$, regress $X_i$ on all other factors and $Y$ on all other f
 
 $$\text{PCC}_i = \operatorname{corr}\!\big(X_i - \hat{X}_i^{(\sim i)},\; Y - \hat{Y}^{(\sim i)}\big)$$
 
-PCC isolates $X_i$'s unique linear contribution after removing the linear effects of every other factor. In a correlated-input design, PCC separates individual influence from collinearity; with independent inputs, PCC and SRC agree in sign and rank ordering but differ in magnitude (PCC normalizes by residual variance, SRC by total variance).
+PCC measures the remaining linear association after residualizing both
+variables against the other inputs. Strong collinearity can make that
+calculation unstable or singular. It does not turn association into a causal
+effect or a variance share.
 
 ### PRCC — Partial Rank Correlation Coefficients
 
-PCC computed on rank-transformed data. Captures monotonic partial contribution. The standard tool for screening in Monte Carlo uncertainty analyses — Marino et al. (2008) *J. Theor. Biol.* cite PRCC as the default for biological models.
-
----
+PRCC applies partial correlation to rank-transformed data to measure monotonic
+association after accounting for the other factors.
 
 ## Code
 
-`estimate_regression_indices` returns all four indices plus both $R^2$ diagnostics in a single call. Sampler-agnostic — works on any $(X, Y)$ dataset.
+`estimate_regression_indices` returns all four indices plus both $R^2$ diagnostics in a single call. It takes an aligned $(X,Y)$ dataset.
 
 ```rust
 use salib::estimators::estimate_regression_indices;
@@ -48,50 +61,35 @@ use ndarray::Array2;
 let indices = estimate_regression_indices(x.view(), &y).unwrap();
 
 println!("{indices}");
-// Regression indices (d=3)
-//   R²(linear) = 0.9987  R²(rank) = 0.9992
-//
-//   Factor      SRC      SRRC       PCC      PRCC
-//   ------   ------    ------    ------    ------
-//        0   0.8942    0.8951    0.9988    0.9992
-//        1   0.4472    0.4476    0.9962    0.9976
-//        2  -0.0012   -0.0018   -0.0084   -0.0121
 ```
 
-> **Verify** on linear fixture $Y = 2 X_0 + X_1$ ($N = 1024$, seed `[0u8; 32]`):
->
-> | Diagnostic | Value |
-> |---|---|
-> | $R^2_{\text{linear}}$ | $> 0.99$ |
-> | $\text{SRC}_0 / \text{SRC}_1$ | $\approx 2.0$ (matches coefficient ratio) |
-> | $\text{SRC}_2$ | $\approx 0$ (absent factor) |
-
-> **Verify** on Ishigami ($N = 4096$, seed `[0u8; 32]`):
->
-> | Diagnostic | Value | Interpretation |
-> |---|---|---|
-> | $R^2_{\text{linear}}$ | 0.19 | Well below 0.7 — SRC untrustworthy |
-> | $R^2_{\text{rank}}$ | 0.19 | SRRC also untrustworthy |
-> | $\text{SRRC}_1$ | $\approx 0$ | Correctly detects $\sin^2(x_2)$ non-monotonicity |
-
----
+For an exact linear model $Y=2X_0+X_1$ with equally variable independent inputs,
+SRC has a coefficient ratio of two, and an absent factor has coefficient zero.
+These are model identities; finite-sample input variances determine the precise
+standardized coefficients. Nonmonotonic responses, such as the Ishigami model's
+$\sin^2(x_2)$ term, can have substantial variance contributions despite weak
+linear and rank associations.
 
 ## When to use each variant
 
-| Index | Captures | Trust signal | Best for |
+| Index | Captures | Diagnostic | Use for |
 |---|---|---|---|
-| SRC | Linear effects | $R^2_{\text{linear}} > 0.7$ | Additive linear models |
-| SRRC | Monotonic effects | $R^2_{\text{rank}} > 0.7$ | Monotonic nonlinearities |
-| PCC | Linear partial contribution | $R^2_{\text{linear}} > 0.7$ | Correlated inputs — isolates individual factors |
-| PRCC | Monotonic partial contribution | $R^2_{\text{rank}} > 0.7$ | Monotonic + correlated inputs |
+| SRC | Linear effects | $R^2_{\text{linear}}$ and residuals | Additive linear models |
+| SRRC | Monotonic effects | $R^2_{\text{rank}}$ and rank residuals | Monotonic nonlinearities |
+| PCC | Linear partial contribution | $R^2_{\text{linear}}$ and residuals | Correlated inputs — isolates individual factors |
+| PRCC | Monotonic partial contribution | $R^2_{\text{rank}}$ and rank residuals | Monotonic + correlated inputs |
 
-All four are sampler-agnostic and cost $O(N d^2 + d^3)$ — negligible compared to any model-evaluation budget. None recover Sobol' indices unless the model is linear (SRC) or monotonic (SRRC/PRCC). The $R^2$ diagnostic is the load-bearing trust signal.
-
----
+All four use existing input/output data. This implementation refits two
+regressions per factor for each partial-correlation calculation, costing
+$O(Nd^3+d^4)$ overall, plus rank sorting. Rank-based indices describe
+associations on transformed data; they are not generally variance shares of
+the original output.
 
 ## Workflow
 
-1. Run `estimate_regression_indices` on your existing $(X, Y)$ data.
-2. Check $R^2_{\text{linear}}$ and $R^2_{\text{rank}}$.
-3. If $R^2 > 0.7$: trust the corresponding indices. Identify dominant factors by $|\text{SRC}|$ or $|\text{PRCC}|$ rank ordering.
-4. If $R^2 < 0.7$: the model is too nonlinear for regression-based analysis. Proceed to variance-based (Sobol') or distribution-based (Borgonovo, PAWN) methods.
+1. Run `estimate_regression_indices` on the existing $(X,Y)$ data.
+2. Inspect $R^2$ and residuals for both fits.
+3. If a fit is adequate for your purpose, compare the corresponding coefficient
+   magnitudes and signs.
+4. If both fits are poor, use variance-based or distribution-based methods to
+   study effects the regressions miss.

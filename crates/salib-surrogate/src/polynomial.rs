@@ -1,29 +1,32 @@
 //! Univariate orthogonal polynomial families used as PCE bases.
 //!
-//! Per Sudret 2006 / Sudret 2008 / Blatman-Sudret 2011: every input
-//! distribution admits a "natural" orthogonal polynomial family
-//! with respect to its measure. The PCE coefficient extraction
-//! (Sudret 2008 Eq 39) relies on orthogonality `⟨Ψₘ, Ψₙ⟩ = 0` for
-//! `m ≠ n`.
+//! The input probability measure determines polynomial orthogonality.
+//! PCE variance decomposition requires `⟨Ψₘ, Ψₙ⟩ = 0` for `m ≠ n`.
+//! This module supplies four classical families; it does not construct
+//! bases for arbitrary distributions.
 //!
 //! | Family | Distribution | Domain | Weight `w(x)` |
 //! |---|---|---|---|
 //! | Legendre `Pₙ` | Uniform `[-1, 1]` | `[-1, 1]` | `1/2` |
 //! | Hermite `Heₙ` (probabilist) | Normal `N(0, 1)` | `ℝ` | `(1/√(2π)) e^(-x²/2)` |
 //! | Laguerre `Lₙ` | Exponential `λ=1` | `[0, ∞)` | `e^(-x)` |
-//! | Jacobi `Pₙ^(α,β)` | Beta `Beta(α+1, β+1)` on `[-1, 1]` | `[-1, 1]` | `(1-x)^α (1+x)^β / Z` |
+//! | Jacobi `Pₙ^(α,β)` | Transformed `Beta(β+1, α+1)` on `[-1, 1]` | `[-1, 1]` | `(1-x)^α (1+x)^β / Z` |
 //!
 //! All four are computed via three-term recurrences for numerical
 //! stability and `O(n)` evaluation.
+//!
+//! Distribution correspondence and Jacobi conventions: [Xiu and Karniadakis
+//! (2002)](https://www.sci.utah.edu/~dxiu/Papers/XiuK_SISC02.pdf), Table 4.1
+//! and Appendix A.1.3, Eqs. A.11 and A.14.
 //!
 //! # Norm conventions
 //!
 //! `norm_squared(family, n) = ⟨Ψₙ, Ψₙ⟩` with respect to the family's
 //! reference probability weight (so the weight integrates to 1).
-//! This is what Sudret 2008 Eq 36 uses for variance decomposition:
+//! PCE variance is the sum over nonconstant terms (Sudret 2008, §5):
 //!
 //! ```text
-//! D_PC = Σⱼ fⱼ² · ⟨Ψⱼ, Ψⱼ⟩
+//! D_PC = Σ_{j ≠ 0} fⱼ² · ⟨Ψⱼ, Ψⱼ⟩
 //! ```
 //!
 //! # Mapping non-canonical inputs
@@ -34,18 +37,15 @@
 //! - `Uniform { lo, hi }` → Legendre on `[-1, 1]`: `ξ = 2(x − lo) / (hi − lo) − 1`.
 //! - `Normal { mu, sigma }` → Hermite on `ℝ`: `ξ = (x − mu) / sigma`.
 //! - `Exponential { lambda }` → Laguerre on `[0, ∞)`: `ξ = λ · x`.
-//! - `Beta { alpha, beta, lo, hi }` → Jacobi on `[-1, 1]`: rescale to canonical Beta domain.
+//! - `Beta { alpha: a, beta: b, lo, hi }` → `ξ = 2(x-lo)/(hi-lo)-1`,
+//!   using `Jacobi { alpha: b-1, beta: a-1 }`.
 //!
-//! PR 16b's `fit_full_pce` will handle this mapping internally;
-//! this module only provides the polynomial primitives.
+//! Both full and sparse PCE fitting expect the caller to perform these
+//! mappings before fitting.
 
 #![allow(clippy::similar_names, clippy::cast_precision_loss)]
 
-/// The four orthogonal polynomial families supported by saltelli-PCE.
-///
-/// `#[non_exhaustive]` — future families (Charlier for Poisson,
-/// Krawtchouk for Binomial) land non-breaking via follow-on PRs
-/// when discrete-input PCE is needed.
+/// The four supported orthogonal polynomial families.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
@@ -60,7 +60,8 @@ pub enum PolynomialFamily {
     /// (rate-1) measure.
     Laguerre,
     /// Jacobi `Pₙ^(α,β)(x)` on `[-1, 1]`. Orthogonal w.r.t. Beta
-    /// measure with shape parameters `(α+1, β+1)`.
+    /// weight `(1-x)^α (1+x)^β`. Under `x = 2u-1`, the variable
+    /// `u` has Beta shape parameters `(β+1, α+1)`.
     Jacobi {
         /// First Jacobi exponent; must exceed -1.
         alpha: f64,
@@ -98,8 +99,9 @@ pub fn evaluate(family: PolynomialFamily, n: usize, x: f64) -> f64 {
 
 /// `⟨Ψₙ, Ψₙ⟩` under the family's reference probability measure
 /// (so the weight integrates to 1). Used as the per-coefficient
-/// variance contribution in Sudret 2008 Eq 36:
-/// `Var(Ψₙ(X)) = norm_squared(family, n)`.
+/// variance contribution for nonconstant terms:
+/// `Var(Ψₙ(X)) = norm_squared(family, n)` for `n > 0`.
+/// The constant term has norm squared one but variance zero.
 ///
 /// # Panics
 ///
@@ -119,7 +121,7 @@ pub fn norm_squared(family: PolynomialFamily, n: usize) -> f64 {
         // ⟨Lₙ, Lₙ⟩ = 1 (standard normalization).
         PolynomialFamily::Laguerre => 1.0,
 
-        // Jacobi under Beta(α+1, β+1) on [-1, 1]:
+        // Jacobi under transformed Beta(β+1, α+1) on [-1, 1]:
         // ⟨Pₙ^(α,β), Pₙ^(α,β)⟩ =
         //     [2^(α+β+1) / (2n+α+β+1)] · Γ(n+α+1)Γ(n+β+1) / [n! · Γ(n+α+β+1)]
         // divided by the normalizing constant of the Beta measure

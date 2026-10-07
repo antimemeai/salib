@@ -1,48 +1,38 @@
-//! PAWN — Pianosi-Wagener moment-independent sensitivity index via
-//! Kolmogorov-Smirnov statistics on conditional vs unconditional CDFs.
+//! PAWN sensitivity estimates from conditional and unconditional
+//! empirical output CDFs.
 //!
-//!
-//!
-//! # Algorithm
-//!
-//! For each factor `i`:
-//!
-//! 1. Slice `X[:, i]` into `S` equal-frequency slices by ordinal rank.
-//! 2. For each slice `k`: collect `Y` values whose `X[:, i]` rank
-//!    falls in slice `k`. Compute the two-sample Kolmogorov-Smirnov
-//!    statistic `KS_k` between the unconditional `Y` and the slice's
-//!    `Y_k`:
+//! For each input, the estimator splits observations into `S`
+//! approximately equal-frequency slices without splitting tied values, and computes
 //!
 //! ```text
-//! KS_k = max_y |F_Y(y) − F_{Y|slice_k}(y)|
+//! KS_k = max_y |F_Y(y) − F_{Y|slice_k}(y)|.
 //! ```
 //!
-//! 3. Aggregate `{KS_1, …, KS_S}` into the per-factor PAWN index:
-//!    - `median` (Pianosi-Wagener 2018 default; bias-resilient)
-//!    - `maximum` (Pianosi-Wagener 2015 default; conservative)
-//!    - `mean`, `minimum`, `cv` (auxiliary statistics)
+//! It returns the median, maximum, mean, minimum, and coefficient of
+//! variation of these slice distances. The median and maximum were
+//! both discussed in [Pianosi and Wagener (2015)](https://doi.org/10.1016/j.envsoft.2015.01.004).
+//! The median describes a typical slice; the maximum records the
+//! largest observed change. Neither is a variance contribution.
 //!
-//! # Why CDF-based, not PDF-based
+//! [Pianosi and Wagener (2018)](https://doi.org/10.1016/j.envsoft.2018.07.019)
+//! introduced estimation from a generic input-output sample using
+//! equal-width conditioning intervals. This implementation
+//! uses equal-frequency rank slices of aligned `(X, Y)` data. The
+//! sample must represent the input distribution of interest.
 //!
-//! Borgonovo δ uses PDF-based KDE divergence; PAWN uses CDF-based
-//! KS statistics. CDFs are observable directly from samples — no
-//! bandwidth selection, no integration grid. Trade-off: KS is less
-//! sensitive to subtle PDF changes (PAWN can underestimate
-//! sensitivity for distributions that differ only in higher moments
-//! while having similar CDFs).
+//! No density bandwidth or numerical integration grid is needed.
+//! Slice count is still a tuning parameter: more slices provide
+//! finer conditioning but fewer observations per conditional CDF.
+//! Check sensitivity to slice count and sample size on the model
+//! being studied. The 2018 paper suggests starting with ten slices
+//! and checking nearby counts. Different sensitivity methods can rank
+//! inputs differently, including on the Ishigami function.
 //!
-//! # 2015 vs 2018 generalization
-//!
-//! Pianosi-Wagener 2015 used designed input (regular slicing on
-//! known marginals); the 2018 generalization works on generic
-//! `(X, Y)` from any sampler. We ship the 2018 form via ordinal-
-//! rank-based slicing — sampler-agnostic.
-//!
-//! # Bit-reproducibility
-//!
-//! Pure under `(X, Y, n_slices)`. Stable sort + ordinal rank →
-//! deterministic slice membership. KS computation is exact (no RNG).
-//! Same `(X, Y, n_slices)` in → bit-identical `PawnIndices` out.
+//! Tied values are assigned by their sorted rank block midpoint; empty
+//! slices are omitted from the summaries. Discrete inputs can therefore
+//! produce fewer slices than requested. A constant input gives zero.
+//! Computation is deterministic for the same ordered data and slice
+//! count; this does not remove sampling or partitioning error.
 
 #![allow(
     clippy::similar_names,
@@ -55,6 +45,7 @@
 use std::cmp::Ordering;
 use std::fmt;
 
+use crate::conditioning::classes;
 #[cfg(test)]
 use ndarray::Array2;
 use ndarray::ArrayView2;
@@ -62,16 +53,13 @@ use salib_core::tree_sum;
 
 /// PAWN sensitivity index estimates per factor — five aggregation
 /// statistics over slice-wise KS values.
-///
-/// `#[non_exhaustive]` — future fields (`bootstrap_ci`, `n_slices`
-/// echo, `total_variance`) land non-breaking.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct PawnIndices {
-    /// Median KS across slices (Pianosi-Wagener 2018 default).
+    /// Median KS across slices.
     pub median: Vec<f64>,
-    /// Maximum KS across slices (Pianosi-Wagener 2015 default).
+    /// Maximum KS across slices.
     pub maximum: Vec<f64>,
     /// Mean KS across slices.
     pub mean: Vec<f64>,
@@ -118,6 +106,14 @@ impl fmt::Display for PawnIndices {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum PawnError {
+    /// An input observation is NaN or infinite.
+    #[error("input at row {row}, column {column} must be finite")]
+    NonfiniteInput {
+        /// Zero-based input row.
+        row: usize,
+        /// Zero-based input column.
+        column: usize,
+    },
     /// An output observation is NaN or infinite.
     #[error("PAWN: output at index {index} must be finite")]
     NonfiniteOutput {
@@ -156,12 +152,14 @@ pub enum PawnError {
 
 /// Estimate PAWN per factor from generic `(X, Y)` data.
 ///
-/// `n_slices` is the conditioning slice count. `SALib` default `10`;
-/// Pianosi 2020 (sensitivity-of-sensitivity analysis) recommends
-/// `S ∈ [10, 20]`. Larger `S` resolves the conditional CDF more
-/// finely but reduces samples per slice (raising MC noise).
+/// `n_slices` is the conditioning slice count. Larger values give
+/// finer conditioning but fewer observations per slice. Compare
+/// results across slice counts; the minimum accepted sample size
+/// is an input check, not an accuracy guarantee.
 ///
 /// # Errors
+///
+/// - [`PawnError::NonfiniteInput`] for any NaN or infinite input.
 ///
 /// - [`PawnError::NonfiniteOutput`] if any output is NaN or infinite.
 /// - [`PawnError::ShapeMismatch`] if `x.nrows() != y.len()`.
@@ -187,7 +185,7 @@ pub fn estimate_pawn(
     if n_slices < 2 {
         return Err(PawnError::TooFewSlices { n_slices });
     }
-    let minimum = 2 * n_slices;
+    let minimum = n_slices.saturating_mul(2);
     if n < minimum {
         return Err(PawnError::InsufficientSamples {
             n,
@@ -198,6 +196,10 @@ pub fn estimate_pawn(
 
     if let Some(index) = y.iter().position(|v| !v.is_finite()) {
         return Err(PawnError::NonfiniteOutput { index });
+    }
+
+    if let Some(((row, column), _)) = x.indexed_iter().find(|(_, v)| !v.is_finite()) {
+        return Err(PawnError::NonfiniteInput { row, column });
     }
 
     // Sort Y once for the unconditional empirical CDF.
@@ -211,27 +213,20 @@ pub fn estimate_pawn(
     let mut cv = vec![0.0_f64; d];
 
     let mut x_col_buf = vec![0.0_f64; n];
-    let mut ks_per_slice = vec![0.0_f64; n_slices];
+    let mut ks_per_slice = Vec::with_capacity(n_slices);
     let mut slice_y_buf: Vec<f64> = Vec::with_capacity(n);
 
     for i in 0..d {
         for k in 0..n {
             x_col_buf[k] = x[[k, i]];
         }
-        let ranks = ordinal_ranks(&x_col_buf);
-
-        for s in 0..n_slices {
-            // Equal-frequency slicing on ranks 1..=N.
-            let lo = (s * n) / n_slices; // exclusive lower (so r > lo)
-            let hi = ((s + 1) * n) / n_slices; // inclusive upper (r <= hi)
+        let groups = classes(&x_col_buf, n_slices);
+        ks_per_slice.clear();
+        for group in groups {
             slice_y_buf.clear();
-            for (k, &r) in ranks.iter().enumerate() {
-                if r > lo && r <= hi {
-                    slice_y_buf.push(y[k]);
-                }
-            }
-            slice_y_buf.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
-            ks_per_slice[s] = ks_two_sample_sorted(&y_sorted, &slice_y_buf);
+            slice_y_buf.extend(group.iter().map(|&k| y[k]));
+            slice_y_buf.sort_by(f64::total_cmp);
+            ks_per_slice.push(ks_two_sample_sorted(&y_sorted, &slice_y_buf));
         }
 
         // Aggregate.
@@ -329,17 +324,6 @@ fn ks_two_sample_sorted(a: &[f64], b: &[f64]) -> f64 {
         }
     }
     max_diff
-}
-
-/// Ordinal ranks `1..=N` matching `scipy.stats.rankdata(method="ordinal")`.
-fn ordinal_ranks(data: &[f64]) -> Vec<usize> {
-    let mut idx: Vec<usize> = (0..data.len()).collect();
-    idx.sort_by(|&a, &b| data[a].partial_cmp(&data[b]).unwrap_or(Ordering::Equal));
-    let mut ranks = vec![0_usize; data.len()];
-    for (rank, &i) in idx.iter().enumerate() {
-        ranks[i] = rank + 1;
-    }
-    ranks
 }
 
 #[cfg(test)]
@@ -596,11 +580,5 @@ mod tests {
     fn summarize_even_count_median_averages() {
         let s = summarize(&[1.0, 2.0, 3.0, 4.0]);
         assert_eq!(s.median, 2.5);
-    }
-
-    #[test]
-    fn ordinal_ranks_one_indexed() {
-        let data = [3.0, 1.0, 2.0];
-        assert_eq!(ordinal_ranks(&data), vec![3, 1, 2]);
     }
 }

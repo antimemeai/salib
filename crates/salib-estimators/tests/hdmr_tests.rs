@@ -151,3 +151,100 @@ fn hdmr_agrees_with_pce_sobol() {
         );
     }
 }
+
+// An affine support transformation does not turn a nonuniform measure into
+// the uniform reference measure of Legendre polynomials (Xiu 2002 Table4.1).
+#[test]
+fn hdmr_rejects_bounded_nonuniform_measure() {
+    use salib_core::{Distribution, ProblemBuilder};
+    use salib_estimators::HdmrError;
+    let problem = ProblemBuilder::new()
+        .factor("uniform", Distribution::Uniform { lo: -1.0, hi: 1.0 })
+        .factor(
+            "triangular",
+            Distribution::Triangular {
+                lo: -1.0,
+                hi: 1.0,
+                mode: 0.0,
+            },
+        )
+        .build()
+        .unwrap();
+    let x =
+        Array2::from_shape_vec((4, 2), vec![-0.5, -0.5, -0.5, 0.5, 0.5, -0.5, 0.5, 0.5]).unwrap();
+    let y = [-1.0, 0.0, 0.0, 1.0];
+    assert!(matches!(
+        estimate_hdmr(x.view(), &y, &problem, 2, 1),
+        Err(HdmrError::UnsupportedDistribution { index: 1, .. })
+    ));
+}
+
+#[test]
+fn hdmr_uniform_normal_additive_analytic_variances() {
+    use salib_core::{Distribution, ProblemBuilder};
+    let problem = ProblemBuilder::new()
+        .factor("uniform", Distribution::Uniform { lo: 2.0, hi: 8.0 })
+        .factor(
+            "normal",
+            Distribution::Normal {
+                mu: 10.0,
+                sigma: 2.0,
+            },
+        )
+        .build()
+        .unwrap();
+    let mut x = Array2::zeros((16, 2));
+    let mut y = vec![0.0; 16];
+    for i in 0..4 {
+        for j in 0..4 {
+            let row = 4 * i + j;
+            x[[row, 0]] = 2.0 + 6.0 * (i as f64 + 0.5) / 4.0;
+            x[[row, 1]] = 10.0 + 2.0 * (j as f64 - 1.5);
+            y[row] = x[[row, 0]] + x[[row, 1]];
+        }
+    }
+    // Var(Uniform[2,8])=3; Var(Normal(10,2))=4. The linear fit is exact.
+    let result = estimate_hdmr(x.view(), &y, &problem, 2, 1).unwrap();
+    assert!((result.total_variance - 7.0).abs() < 1e-10);
+    assert!((result.first_order[0] - 3.0 / 7.0).abs() < 1e-10);
+    assert!((result.first_order[1] - 4.0 / 7.0).abs() < 1e-10);
+}
+
+#[test]
+fn hdmr_rejects_input_dimensions_before_canonical_mapping() {
+    use salib_core::{Distribution, ProblemBuilder};
+    use salib_estimators::HdmrError;
+    let problem = ProblemBuilder::new()
+        .factor("one", Distribution::Uniform { lo: -1.0, hi: 1.0 })
+        .factor("two", Distribution::Uniform { lo: -1.0, hi: 1.0 })
+        .build()
+        .unwrap();
+    let x = Array2::zeros((4, 1));
+    assert!(matches!(
+        estimate_hdmr(x.view(), &[0.0; 4], &problem, 2, 1),
+        Err(HdmrError::PceFitFailed(
+            salib_surrogate::PceError::FamiliesDimMismatch { .. }
+        ))
+    ));
+}
+
+#[test]
+fn hdmr_rejects_nan_outputs_and_unrepresentable_variance() {
+    use salib_core::{Distribution, ProblemBuilder};
+    let problem = ProblemBuilder::new()
+        .factor(
+            "normal",
+            Distribution::Normal {
+                mu: 0.0,
+                sigma: 1.0,
+            },
+        )
+        .build()
+        .unwrap();
+    let x = Array2::from_shape_fn((16, 1), |(i, _)| i as f64);
+    assert!(estimate_hdmr(x.view(), &[f64::NAN; 16], &problem, 1, 1).is_err());
+    // Y=1e200*X has mathematical variance 1e400, outside f64 range.
+    // Finite observations do not justify returning infinite variance/NaN indices.
+    let y: Vec<_> = (0..16).map(|i| i as f64 * 1e200).collect();
+    assert!(estimate_hdmr(x.view(), &y, &problem, 1, 1).is_err());
+}

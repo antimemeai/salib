@@ -1,71 +1,25 @@
-//! Janon 2014 asymptotically-efficient first-order Sobol' estimator
-//! (`T_N^X`).
+//! Janon's symmetrized first-order Sobol' estimator (`T_N^X`).
 //!
-//! Per Janon-Klein-Lagnoux-Nodet-Prieur 2014 (`arXiv:1303.6451`,
-//! ESAIM Probability and Statistics), Eq 6 / Eq 8. Same `(A, B, A_Bⁱ)`
-//! Saltelli matrix as `saltelli2010`, but with a tighter denominator
-//! that uses joint information from both `Y` and `Y^X`. Janon § 2.2
-//! Prop 2.5 proves `T_N^X` is **asymptotically efficient** —
-//! minimum-variance among regular estimators based on the pick-freeze
-//! replications.
-//!
-//! # Formula (Eq 6, the formal definition)
+//! [Janon et al. (2014)](https://doi.org/10.1051/ps/2013040), Eq. (2.6),
+//! pairs `Y = f(B)` with `Y^X = f(A_Bⁱ)`, sharing input `i`. With
+//! `m = (mean(Y) + mean(Y^X))/2`, the estimate is
 //!
 //! ```text
-//! Y       = f(B)                         pick-freeze "Y" series
-//! Y^X     = f(A_Bⁱ)                       paired "Y given X frozen"
-//! Ȳ      = mean(Y),  Ȳ^X = mean(Y^X),  Ȳ₂ = (Ȳ + Ȳ^X) / 2
-//!
-//!         (1/N) Σ Y_j Y_j^X  −  Ȳ₂²
-//! T_N^X = ─────────────────────────────────────────────────
-//!         (1/N) Σ (Y_j² + (Y_j^X)²)/2  −  Ȳ₂²
+//! T_N^X = mean((Y - m) * (Y^X - m))
+//!         / mean(((Y - m)^2 + (Y^X - m)^2)/2).
 //! ```
 //!
-//! Estimates `S^X = Var(E[Y|X]) / Var(Y)`. Note: the paper's Eq 8
-//! "rewriting" form `Σ (Y − Ȳ₂)(Y^X − Ȳ₂) / Σ ((Y + Y^X)/2 − Ȳ₂)²`
-//! is **not algebraically equivalent** to Eq 6. The numerators *are*
-//! equal (algebraic identity from centering), but the denominators
-//! differ:
+//! This is algebraically equivalent to Eqs. (2.6) and (2.8) in the
+//! published paper. Proposition 3.5 establishes asymptotic efficiency
+//! among regular estimators for the exchangeable pair model; the normal
+//! limit in Proposition 3.2 assumes a finite fourth output moment and
+//! independent, identically distributed pairs. These results do not give
+//! a finite-sample or deterministic QMC ranking of estimators.
 //!
-//! ```text
-//! Eq 6 denom (popn) ≈ (Var(Y) + Var(Y^X)) / 2
-//! Eq 8 denom (popn)  = Var((Y + Y^X)/2) = (Var(Y) + Var(Y^X) + 2·Cov(Y, Y^X)) / 4
-//! ```
-//!
-//! Under the pick-freeze pairing, `Cov(Y, Y^X) = Var(E[Y|Xᵢ]) =
-//! Sᵢ · Var(Y)`. Substituting and assuming `Var(Y) = Var(Y^X) = V`:
-//!
-//! ```text
-//! Eq 8 denom / Eq 6 denom = (1 + Sᵢ) / 2
-//! Eq 8 estimator         = Eq 6 estimator · 2 / (1 + Sᵢ)
-//! ```
-//!
-//! For Ishigami `S₁ = 0.314`, Eq 8 inflates by `2 / 1.314 ≈ 1.52`,
-//! producing `≈ 0.48` instead of the analytic `0.314` — verified
-//! empirically during PR-15 implementation. We use Eq 6, the formal
-//! definition. (The paper presents Eq 8 as a numerical-stability
-//! rewriting; the inequivalence appears to be unintentional.)
-//!
-//! # Why this alongside Saltelli2010
-//!
-//! Same model-evaluation budget (`N(d+2)` evals; reuses the existing
-//! `SaltelliMatrix`). Drop-in replacement for `estimate_saltelli2010`
-//! that strictly improves asymptotic CI width — for any fixed `N`,
-//! `T_N^X` has variance `≤` Saltelli's. The improvement is small at
-//! large `N` and small `S` (Janon Prop 2.3: equality at `S^X = 0` or
-//! `1`); meaningful at moderate `N` and intermediate `S`.
-//!
-//! # What this module ships
-//!
-//! - `JanonIndices` — first-order `S_i` per factor (no total-order;
-//!   Janon's paper concerns first-order only). Pair with Jansen 1999
-//!   from `saltelli2010` for total-order coverage.
-//!
-//! # Bit-reproducibility
-//!
-//! Pure under `(matrix, model)`. All sums route through
-//! `tree_sum` / `tree_dot`. Same matrix + model in → bit-identical
-//! `JanonIndices` out.
+//! The implementation uses `N(d+2)` model calls, or `N(2d+2)` with
+//! second-order blocks. Its optional pairwise estimates use a separate
+//! cross-product formula; the Janon efficiency result does not cover them.
+//! For total effects, use [`crate::estimate_saltelli2010`].
 
 #![allow(
     clippy::similar_names,
@@ -80,17 +34,13 @@ use salib_core::tree_sum;
 use salib_samplers::SaltelliMatrix;
 
 /// First-order Sobol' indices via Janon `T_N^X`.
-///
-/// `#[non_exhaustive]` — future fields (`bootstrap_ci`,
-/// `total_variance` for downstream GUM) land non-breaking.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct JanonIndices {
-    /// First-order Sobol' indices, length `d`. Asymptotically
-    /// efficient per Janon 2014 Prop 2.5.
+    /// First-order Sobol' indices, length `d`.
     pub first_order: Vec<f64>,
-    /// Total variance estimated from the joint `(Y, Y^X)` samples.
+    /// Output variance estimated from `f(B)` with divisor `N`.
     pub total_variance: f64,
     /// Second-order indices `S2_{i,j}` for all `i < j`, laid out as
     /// `second_order[i][k] = S2_{i, i+k+1}` (upper triangle, row-major).
@@ -144,10 +94,8 @@ where
         .map(|m| evaluate_rows(m, &model))
         .collect();
 
-    // Total variance from the Y series alone (same posture as
-    // saltelli2010's diagnostic `total_variance`). The denominator
-    // inside the per-factor T_N^X formula uses joint variance and
-    // is computed below.
+    // Diagnostic variance from Y=f(B). Each first-order estimate uses
+    // its own joint variance denominator below.
     let mean_y = tree_sum(&y) / n_f;
     let y_sq: Vec<f64> = y.iter().map(|v| (v - mean_y).powi(2)).collect();
     let total_variance = tree_sum(&y_sq) / n_f;
@@ -157,7 +105,7 @@ where
         let mean_yx = tree_sum(y_xi) / n_f;
         let mean_joint = 0.5 * mean_y + 0.5 * mean_yx;
 
-        // Numerator (Janon Eq 6), centered about the joint mean.
+        // Numerator (Janon Eq. (2.6)), centered about the joint mean.
         let yy_xi: Vec<f64> = y
             .iter()
             .zip(y_xi.iter())
@@ -166,7 +114,7 @@ where
         let mean_y_yx = tree_sum(&yy_xi) / n_f;
         let num = mean_y_yx;
 
-        // Denominator (Janon Eq 6), centered about the joint mean.
+        // Denominator (Janon Eq. (2.6)), centered about the joint mean.
         // This is the joint second-moment estimator that gives
         // Janon's asymptotic-efficiency property.
         let half_sq_sum: Vec<f64> = y
@@ -185,7 +133,7 @@ where
         first_order.push(s_i);
     }
 
-    // ── Second-order indices (Saltelli 2010 Eq d) ────────────────
+    // Pairwise indices from complementary hybrids.
     //
     // When B_Aⁱ matrices are available, compute S2_{ij} for i < j:
     //   V_{ij}  = (1/N) Σ_k [ fba[j][k] · fab[i][k] - fa[k] · fb[k] ]

@@ -1,10 +1,9 @@
 # salib-samplers
 
-Sampling designs for sensitivity analysis, stored as `ndarray` matrices with
-explicit layout metadata. Depend on this crate directly when generating inputs
-for a simulator or service that evaluates samples separately from estimation.
-Add `salib-estimators` for the corresponding analyses; use `salib` when both
-sampling and estimation live in one application.
+Sampling designs stored as `ndarray` matrices, with the layout information
+needed by each estimator. Use this crate to generate inputs for a simulator
+or service, and `salib-estimators` to analyze its outputs. The `salib` crate
+includes both.
 
 ## Choose a design
 
@@ -46,16 +45,15 @@ scrambled-QMC error guarantee. LHS consumes and advances `RngState`.
 
 ```toml
 [dependencies]
-salib-core = "0.2"
-salib-samplers = "0.2"
+salib-core = "0.3"
+salib-samplers = "0.3"
 ```
 
-`serde` enables serialization of matrix-carrying designs through ndarray.
-Sampler configuration hashing identifies configuration, not the sample size or
-model. Iman–Conover produces correlated samples; it does not make an
+`serde` serializes designs and their matrices through ndarray. A sampler
+configuration hash excludes the sample size and model; record those separately. Iman–Conover produces correlated samples; it does not make an
 independent-input Sobol' estimator valid for dependent inputs.
 
 [API reference](https://docs.rs/salib-samplers/latest/salib_samplers/) ·
-[Method selection](https://github.com/antimeme-ai/salib/blob/main/docs/choosing.md)
+[Method selection](https://github.com/antimemeai/salib/blob/master/docs/choosing.md)
 
 MIT OR Apache-2.0.

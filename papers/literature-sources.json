@@ -1,0 +1,149 @@
+{
+  "description": "Citation destinations, not a record of full-text verification; see the dated audit reports for access and claim-level evidence.",
+  "sources": [
+    {
+      "id": "sobol1993",
+      "url": "https://www.andreasaltelli.eu/file/repository/sobol1993.pdf"
+    },
+    {
+      "id": "saltelli2010",
+      "url": "https://doi.org/10.1016/j.cpc.2009.09.018"
+    },
+    {
+      "id": "jansen1999",
+      "url": "https://doi.org/10.1016/S0010-4655%2898%2900154-4"
+    },
+    {
+      "id": "janon2014",
+      "url": "https://doi.org/10.1051/ps/2013040"
+    },
+    {
+      "id": "owen2013",
+      "url": "https://doi.org/10.1145/2457459.2457460"
+    },
+    {
+      "id": "plischke2013",
+      "url": "https://doi.org/10.1016/j.ejor.2012.11.047"
+    },
+    {
+      "id": "homma1996",
+      "url": "https://doi.org/10.1016/0951-8320%2896%2900002-6"
+    },
+    {
+      "id": "morris1991",
+      "url": "https://www.stat.cmu.edu/technometrics/90-00/vol-33-02/v3302161.pdf"
+    },
+    {
+      "id": "campolongo2007",
+      "url": "https://doi.org/10.1016/j.envsoft.2006.10.004"
+    },
+    {
+      "id": "cukier1973",
+      "url": "https://doi.org/10.1063/1.1680571"
+    },
+    {
+      "id": "saltelli1999",
+      "url": "https://doi.org/10.1080/00401706.1999.10485594"
+    },
+    {
+      "id": "tarantola2006",
+      "url": "https://doi.org/10.1016/j.ress.2005.06.003"
+    },
+    {
+      "id": "plischke2010",
+      "url": "https://www-10b015.pages.gwdg.de/papers/easi_ress.pdf"
+    },
+    {
+      "id": "borgonovo2007",
+      "url": "https://doi.org/10.1016/j.ress.2006.04.015"
+    },
+    {
+      "id": "pianosi2015",
+      "url": "https://doi.org/10.1016/j.envsoft.2015.01.004"
+    },
+    {
+      "id": "pianosi2018",
+      "url": "https://research-information.bris.ac.uk/ws/portalfiles/portal/175128594/Pianosi_PAWN_givendata_final.pdf"
+    },
+    {
+      "id": "maumedeschamps2018",
+      "url": "https://arxiv.org/abs/1702.00925"
+    },
+    {
+      "id": "fort2016",
+      "url": "https://arxiv.org/abs/1305.2329"
+    },
+    {
+      "id": "sobol-kucherenko2009",
+      "url": "https://doi.org/10.1016/j.matcom.2009.01.023"
+    },
+    {
+      "id": "saltelli-marivoet1990",
+      "url": "https://doi.org/10.1016/0951-8320%2890%2990065-U"
+    },
+    {
+      "id": "xiu-karniadakis2002",
+      "url": "https://www.sci.utah.edu/~dxiu/Papers/XiuK_SISC02.pdf"
+    },
+    {
+      "id": "blatman-sudret2011",
+      "url": "https://doi.org/10.1016/j.jcp.2010.12.021"
+    },
+    {
+      "id": "li2001",
+      "url": "https://doi.org/10.1021/jp010450t"
+    },
+    {
+      "id": "constantine2015",
+      "url": "https://doi.org/10.1137/1.9781611973860"
+    },
+    {
+      "id": "song2016",
+      "url": "https://users.iems.northwestern.edu/~nelsonb/Publications/SongNelsonStaum.pdf"
+    },
+    {
+      "id": "fisher1925",
+      "url": "https://www.usablebuildings.co.uk/UsableBuildings/Unprotected/ClassicsFisher1925.pdf"
+    },
+    {
+      "id": "brennan2001",
+      "url": "https://link.springer.com/book/10.1007/978-1-4757-3456-0"
+    },
+    {
+      "id": "hickernell1998",
+      "url": "https://doi.org/10.1090/S0025-5718-98-00894-1"
+    },
+    {
+      "id": "box1978",
+      "url": "https://openlibrary.org/works/OL2181531W/Statistics_for_experimenters"
+    },
+    {
+      "id": "saltelli2008",
+      "url": "https://doi.org/10.1002/9780470725184"
+    },
+    {
+      "id": "iooss2015",
+      "url": "https://arxiv.org/abs/1404.2405"
+    },
+    {
+      "id": "sudret2008",
+      "url": "https://doi.org/10.1016/j.ress.2007.04.002"
+    },
+    {
+      "id": "efron2004",
+      "url": "https://arxiv.org/abs/math/0406456"
+    },
+    {
+      "id": "constantine2014",
+      "url": "https://arxiv.org/abs/1304.2070"
+    },
+    {
+      "id": "marino2008",
+      "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC2570191/"
+    },
+    {
+      "id": "roustant2017",
+      "url": "https://arxiv.org/abs/1612.03689"
+    }
+  ]
+}

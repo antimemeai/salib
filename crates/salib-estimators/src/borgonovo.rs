@@ -1,65 +1,48 @@
-//! Borgonovo δ — moment-independent sensitivity index via the
-//! Plischke-Borgonovo-Smith 2013 given-data algorithm with KDE-based
-//! density estimation.
+//! Borgonovo's δ: expected total variation between unconditional and
+//! conditional output distributions, estimated from paired observations.
 //!
-//!
-//!
-//! # Definition (Borgonovo 2007)
+//! [Borgonovo (2007)](https://doi.org/10.1016/j.ress.2006.04.015) defines
+//! the index, written here for distributions with the required densities:
 //!
 //! ```text
-//! δᵢ = (1/2) · E_{Xᵢ} [ ∫ |f_Y(y) − f_{Y|Xᵢ}(y)| dy ]
+//! δᵢ = (1/2) E_{Xᵢ}[∫ |f_Y(y) − f_{Y|Xᵢ}(y)| dy].
 //! ```
 //!
-//! `δᵢ ∈ [0, 1]` measures the average absolute area between the
-//! unconditional density of `Y` and the conditional density of `Y`
-//! given `Xᵢ`. Unlike `Sᵢ` and `Sᵀᵢ`, `δ` is moment-independent —
-//! sensitive to *any* change in the output distribution shape, not
-//! just variance. Two factors with the same `Sᵢ` can have very
-//! different `δ` if one shifts the distribution location while the
-//! other only changes the scale.
+//! The population index lies in `[0, 1]` and is zero exactly when
+//! `Y` and `Xᵢ` are independent. It can detect changes in location,
+//! scale, or shape. It does not decompose output variance.
 //!
-//! # Algorithm — Plischke-Borgonovo-Smith 2013 Eq 26
+//! # Estimator
 //!
-//! Given `(X, Y)`:
+//! This follows the class-conditional density approach of
+//! [Plischke, Borgonovo and Smith (2013)](https://doi.org/10.1016/j.ejor.2012.11.047).
 //!
-//! 1. Build an unconditional `f_Y` via Gaussian KDE with Silverman's
-//!    bandwidth rule.
-//! 2. Partition `X[:, i]` into `M` equal-frequency classes by rank.
-//!    `M = round(min(⌈N^exp⌉, 48))`, where
-//!    `exp = 2 / (7 + tanh((1500 − N) / 500))`. Matches `SALib`.
-//! 3. For each class `j`:
-//!    - Build conditional `f_{Y|class_j}` via Gaussian KDE on `Y[ix_j]`.
-//!    - Trapezoidal integration: `area_j = ∫ |f_Y(y) − f_{Y|class_j}(y)| dy`.
-//!    - Class contribution: `(|ix_j| / (2·N)) · area_j`.
-//! 4. `δᵢ = Σⱼ contribution_j`.
+//! 1. Estimate the unconditional output density with Gaussian KDE.
+//! 2. Split each input into approximately equal-frequency classes by
+//!    sorted input values, keeping ties in one class. The requested
+//!    class count is `ceil(N^exp)`, clamped to
+//!    `[2, 48]`, with `exp = 2 / (7 + tanh((1500 − N)/500))`.
+//! 3. Estimate each class's output density with Gaussian KDE.
+//! 4. Integrate the absolute density difference by the trapezoidal
+//!    rule on 100 points between `min(Y)` and `max(Y)`, then weight
+//!    each integral by its class size divided by `2N`.
 //!
-//! Y-grid for integration: 100 points uniformly spaced from
-//! `min(Y)` to `max(Y)`. Matches `SALib`'s default.
+//! The bandwidth is `(3N/4)^(−1/5)` times the population standard
+//! deviation of the density's sample. Outputs are affinely normalized
+//! to `[0,1]` before KDE to avoid scale overflow; the integrated density
+//! distance is unchanged by this coordinate transformation. No bootstrap bias correction
+//! or confidence interval is computed.
 //!
-//! # Differences from `SALib`
+//! The 48-class cap and fixed integration grid leave approximation
+//! error that more observations alone need not remove. The paper's
+//! partition-refinement convergence results are not guarantees for
+//! these fixed limits. There is no universal sufficient sample size.
+//! Ties are assigned by the midpoint of their sorted rank block;
+//! empty classes are omitted. Thus discrete inputs can yield fewer
+//! classes, while a constant input produces one unconditional class.
+//! The KDE still assumes continuous output densities.
 //!
-//! `SALib`'s `analyze.delta` wraps `calc_delta` in a `bias_reduced_delta`
-//! Plischke 2013 Eq 30 jackknife-style correction (one bootstrap
-//! re-estimate plus 100 bootstrap CI samples). We ship the
-//! uncorrected `calc_delta` per Eq 26; the bias correction is
-//! not yet supported. At `N = 4096`
-//! on Ishigami, raw `calc_delta` and `bias_reduced_delta` differ by
-//! `~0.04` per factor — both within the analytic-recovery
-//! tolerance.
-//!
-//! # First-order only
-//!
-//! `SALib`'s `delta.analyze` also returns the Sobol' `S₁` from a
-//! correlation-based estimator on the same `(X, Y)`. We don't —
-//! `S₁` lives in `saltelli2010` (designed) and `rbd_fast` (given-
-//! data); the Borgonovo module focuses on `δ`.
-//!
-//! # Bit-reproducibility
-//!
-//! Pure under `(X, Y)`. KDE evaluation is fully deterministic
-//! (closed-form Gaussian sum). Partitioning uses ordinal ranking;
-//! ties broken by input order. Same `(X, Y)` in → bit-identical
-//! `BorgonovoIndices` out.
+//! Computation is deterministic for the same ordered `(X, Y)` data.
 
 #![allow(
     clippy::similar_names,
@@ -70,20 +53,16 @@
     clippy::items_after_statements
 )]
 
-use std::cmp::Ordering;
 use std::f64::consts::PI;
 use std::fmt;
 
+use crate::conditioning::classes;
 #[cfg(test)]
 use ndarray::Array2;
 use ndarray::ArrayView2;
 use salib_core::tree_sum;
 
 /// Borgonovo `δ` estimates per factor.
-///
-/// `#[non_exhaustive]` — future fields (`bootstrap_ci`,
-/// `bias_reduced` flag, `total_variance` echo for downstream GUM
-/// contribution) land non-breaking.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
@@ -117,6 +96,20 @@ impl fmt::Display for BorgonovoIndices {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum BorgonovoError {
+    /// An input observation is NaN or infinite.
+    #[error("input at row {row}, column {column} must be finite")]
+    NonfiniteInput {
+        /// Zero-based input row.
+        row: usize,
+        /// Zero-based input column.
+        column: usize,
+    },
+    /// An output observation is NaN or infinite.
+    #[error("output at index {index} must be finite")]
+    NonfiniteOutput {
+        /// Zero-based output index.
+        index: usize,
+    },
     /// Input and output shapes are incompatible.
     #[error("Borgonovo δ: shape mismatch — X has {x_rows} rows, y has {y_len} elements")]
     ShapeMismatch {
@@ -149,6 +142,9 @@ pub enum BorgonovoError {
 ///
 /// # Errors
 ///
+/// - [`BorgonovoError::NonfiniteInput`] for any NaN or infinite input.
+/// - [`BorgonovoError::NonfiniteOutput`] for any NaN or infinite output.
+///
 /// - [`BorgonovoError::ShapeMismatch`] if `x.nrows() != y.len()`.
 /// - [`BorgonovoError::ZeroD`] if `x.ncols() == 0`.
 /// - [`BorgonovoError::InsufficientSamples`] if `N < 16`.
@@ -172,16 +168,34 @@ pub fn estimate_borgonovo_delta(
         return Err(BorgonovoError::InsufficientSamples { n });
     }
 
+    if let Some(((row, column), _)) = x.indexed_iter().find(|(_, v)| !v.is_finite()) {
+        return Err(BorgonovoError::NonfiniteInput { row, column });
+    }
+    if let Some(index) = y.iter().position(|v| !v.is_finite()) {
+        return Err(BorgonovoError::NonfiniteOutput { index });
+    }
+
     let (y_min, y_max) = min_max(y);
-    if !(y_max - y_min).is_finite() || (y_max - y_min) < 1e-15 {
+    if y_min == y_max {
         return Err(BorgonovoError::ZeroVariance);
     }
 
-    // Y grid: 100 points from y_min to y_max inclusive (matches
-    // `SALib`'s `np.linspace(min, max, 100)`).
+    // Density distance is invariant under a common affine output coordinate.
+    // Work on [0,1] to keep bandwidth residual squares and KDE arithmetic bounded.
+    let range = y_max - y_min;
+    let normalized: Vec<_> = if range.is_finite() {
+        y.iter().map(|&value| (value - y_min) / range).collect()
+    } else {
+        // Opposite-sign finite extrema can have an unrepresentable raw range.
+        let scale = y_min.abs().max(y_max.abs());
+        let lo = y_min / scale;
+        let span = y_max / scale - lo;
+        y.iter().map(|&value| (value / scale - lo) / span).collect()
+    };
+    let y = normalized.as_slice();
     const Y_GRID_POINTS: usize = 100;
-    let y_grid: Vec<f64> = (0..Y_GRID_POINTS)
-        .map(|k| y_min + (y_max - y_min) * (k as f64) / ((Y_GRID_POINTS - 1) as f64))
+    let y_grid: Vec<_> = (0..Y_GRID_POINTS)
+        .map(|k| k as f64 / (Y_GRID_POINTS - 1) as f64)
         .collect();
 
     // Adaptive class count per `SALib` / Plischke 2013.
@@ -206,28 +220,17 @@ pub fn estimate_borgonovo_delta(
 /// Plischke 2013 Eq 26 estimator for a single factor's `δ`.
 fn calc_delta(y: &[f64], y_grid: &[f64], fy: &[f64], x_col: &[f64], n_classes: usize) -> f64 {
     let n = y.len();
-    let ranks = ordinal_ranks(x_col);
+    let groups = classes(x_col, n_classes);
 
     let n_f = n as f64;
     let mut d_hat = 0.0_f64;
     let mut class_y_buf: Vec<f64> = Vec::with_capacity(n);
     let mut diff_buf = vec![0.0_f64; y_grid.len()];
 
-    for j in 0..n_classes {
-        // Class j has rank-bounds (lo, hi]. Equal-frequency partitioning.
-        let lo = (n_f * (j as f64) / (n_classes as f64)) as usize;
-        let hi = (n_f * ((j + 1) as f64) / (n_classes as f64)) as usize;
-        // Collect Y values whose rank falls in (lo, hi].
+    for group in groups {
         class_y_buf.clear();
-        for (k, &r) in ranks.iter().enumerate() {
-            if r > lo && r <= hi {
-                class_y_buf.push(y[k]);
-            }
-        }
+        class_y_buf.extend(group.iter().map(|&k| y[k]));
         let nm = class_y_buf.len();
-        if nm == 0 {
-            continue;
-        }
 
         // Peak-to-peak: if the class's Y is constant, the conditional
         // density collapses to a δ-distribution; treat the divergence
@@ -269,14 +272,11 @@ pub(crate) fn class_count(n: usize) -> usize {
     raw.clamp(2, 48)
 }
 
-/// Silverman's rule-of-thumb bandwidth for univariate Gaussian KDE,
-/// matching `scipy.stats.gaussian_kde(bw_method="silverman")`:
+/// Silverman's normal-reference bandwidth for univariate Gaussian KDE:
 ///
 /// `h = (n · 3/4)^(−1/5) · σ`
 ///
-/// where `σ` is the sample standard deviation (with `1/n` divisor,
-/// not Bessel `1/(n−1)` — `scipy.gaussian_kde` uses the population
-/// std for the bandwidth derivation).
+/// where `σ` uses the population variance divisor `n`.
 fn silverman_bandwidth(data: &[f64]) -> f64 {
     let n = data.len() as f64;
     let mean = tree_sum(data) / n;
@@ -331,20 +331,6 @@ fn trapz(y: &[f64], x: &[f64]) -> f64 {
         sum += 0.5 * (y[i] + y[i - 1]) * (x[i] - x[i - 1]);
     }
     sum
-}
-
-/// `scipy.stats.rankdata(method='ordinal')` — ranks are
-/// `1..=N` with stable tie-breaking by input order.
-///
-/// `pub(crate)` so sibling partition-based estimators can reuse it.
-pub(crate) fn ordinal_ranks(data: &[f64]) -> Vec<usize> {
-    let mut idx: Vec<usize> = (0..data.len()).collect();
-    idx.sort_by(|&a, &b| data[a].partial_cmp(&data[b]).unwrap_or(Ordering::Equal));
-    let mut ranks = vec![0_usize; data.len()];
-    for (rank, &i) in idx.iter().enumerate() {
-        ranks[i] = rank + 1;
-    }
-    ranks
 }
 
 fn min_max(data: &[f64]) -> (f64, f64) {
@@ -545,19 +531,5 @@ mod tests {
         let x = [0.0, 1.0, 2.0];
         let y = [0.0, 2.0, 4.0];
         assert!((trapz(&y, &x) - 4.0).abs() < 1e-12);
-    }
-
-    #[test]
-    fn ordinal_ranks_assigns_one_through_n() {
-        let data = [3.0, 1.0, 2.0];
-        let ranks = ordinal_ranks(&data);
-        assert_eq!(ranks, vec![3, 1, 2]);
-    }
-
-    #[test]
-    fn ordinal_ranks_breaks_ties_by_input_order() {
-        let data = [1.0, 1.0, 1.0];
-        let ranks = ordinal_ranks(&data);
-        assert_eq!(ranks, vec![1, 2, 3]);
     }
 }

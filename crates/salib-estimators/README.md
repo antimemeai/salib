@@ -1,11 +1,10 @@
 # salib-estimators
 
-Sensitivity measures implemented from published formulas: Sobol' variance
-indices, Morris elementary effects, FAST/eFAST/RBD-FAST, distribution and
-quantile measures, derivative bounds, regression, and experimental-design
-statistics. Depend on this crate directly when analyzing cached outputs or
-composing estimators in your own workflow. Add `salib-samplers` for designs and
-`salib-core` for input/RNG types, or use the `salib` facade for all three.
+Estimators for Sobol' indices, Morris effects, FAST, distribution and quantile
+measures, derivative bounds, regression, and experimental designs. Most accept
+either a model function with a sampling design or saved input/output arrays.
+Add `salib-samplers` for designs and `salib-core` for input and RNG types, or
+use `salib` for all three.
 
 ## Choose an entry point
 
@@ -18,7 +17,7 @@ composing estimators in your own workflow. Add `salib-samplers` for designs and
 | `estimate_morris_effects`, grouped variant | Screening: signed mean, absolute mean, and spread of elementary effects |
 | `estimate_fast`, `estimate_rbd_fast` | Frequency-based indices; RBD-FAST takes given data and returns first-order indices |
 | `estimate_pawn`, `estimate_borgonovo_delta`, `estimate_qosa` | Changes in CDF, density, or a chosen quantile from `(X,Y)` data |
-| `finite_difference_gradients`, `estimate_dgsm`, `poincare_constant` | Gradient acquisition, mean squared derivatives, and total-effect bounds |
+| `finite_difference_gradients`, `estimate_dgsm`, `poincare_constant` | Compute gradients, mean squared derivatives, and total-effect bounds |
 | `estimate_regression_indices`, `estimate_given_data_sobol` | Linear/rank associations or approximate Sobol' main effects from existing data |
 | `bootstrap_given_data` → `BootstrapCi` | Row bootstrap for a supplied given-data estimator; inspect skipped resamples |
 | ANOVA, G-theory, fractional factorial, discrepancy | Structured grids, measurement reliability, two-level effects, or point-set quality |
@@ -44,8 +43,8 @@ println!("S1: {:?}; intervals: {:?}",
     result.indices.first_order, result.first_order_ci);
 ```
 
-The analytic first-order targets are `[0.2, 0.8]`; total effects match because
-the model is additive. Treat estimates as uncertain, not exact fractions. For
+The exact first-order indices are `[0.2, 0.8]`. Total effects are the same
+because the model is additive; estimates will vary with the sample. For
 physical inputs, map unit coordinates through each input distribution before
 evaluating the model. For cached outputs, preserve block and row alignment.
 
@@ -58,9 +57,9 @@ for degenerate variance. Inspect the result and method documentation.
 
 ```toml
 [dependencies]
-salib-core = "0.2"
-salib-samplers = "0.2"
-salib-estimators = "0.2"
+salib-core = "0.3"
+salib-samplers = "0.3"
+salib-estimators = "0.3"
 ```
 
 `serde` serializes result types. `surrogate` enables `estimate_hdmr` and depends
@@ -68,6 +67,6 @@ on `salib-surrogate`; PCE fitting and active subspaces live in that crate.
 Shapley effects live in `salib-shapley`.
 
 [API reference](https://docs.rs/salib-estimators/latest/salib_estimators/) ·
-[Method selection](https://github.com/antimeme-ai/salib/blob/main/docs/choosing.md)
+[Method selection](https://github.com/antimemeai/salib/blob/master/docs/choosing.md)
 
 MIT OR Apache-2.0.

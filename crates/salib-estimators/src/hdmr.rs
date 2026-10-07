@@ -1,38 +1,36 @@
-//! RS-HDMR (High-Dimensional Model Representation) via PCE
-//! decomposition.
+//! HDMR component variances obtained by grouping a fitted PCE.
 //!
-//! Fits a full polynomial chaos expansion to `(x, y)` data, then
-//! decomposes the PCE coefficients by interaction order to produce
-//! HDMR component variances and Sobol' indices.
+//! This implementation fits all total-degree polynomials up to
+//! `max_degree` by OLS, then groups coefficient contributions by their
+//! active factor sets. It returns first-, second-, and total-order Sobol'
+//! indices and variance fractions by interaction order.
 //!
-//! # Algorithm
+//! The coefficient identities require independent inputs and polynomial
+//! families orthogonal under the input measure. The current automatic
+//! mapping supports Uniform and Normal factors. Other distributions are
+//! rejected: an affine support transformation does not turn a nonuniform
+//! measure into the uniform reference measure of Legendre polynomials.
 //!
-//! 1. Map physical-domain inputs to each factor's polynomial-canonical
-//!    domain (Legendre `[-1, 1]` for Uniform, Hermite `ℝ` for Normal).
-//! 2. Fit a full PCE of total degree `max_degree` via OLS
-//!    PCE fitting.
-//! 3. For each non-constant basis function `α`, compute its variance
-//!    contribution `β_α² · ∏_k ⟨Ψ_{α_k}, Ψ_{α_k}⟩`.
-//! 4. Group contributions by interaction order (number of active
-//!    factors) and by factor subset, accumulating into first-order,
-//!    second-order, and total-order Sobol' indices.
+//! `max_order` limits the length of the reported `order_variance` vector.
+//! It does not remove higher-order terms from the fit or total indices.
+//! Reported order fractions can therefore sum to less than one.
 //!
-//! # Relation to `sobol_indices_from_pce`
-//!
-//! `sobol_indices_from_pce` computes the same
-//! first-order and total-order indices from the same PCE. HDMR adds:
-//! - Second-order pairwise indices `S2_{i,j}`.
-//! - Per-interaction-order variance fractions.
-//! - Parameterized `max_order` truncation.
-//!
-//! The first-order and total-order results are algebraically identical
-//! to `sobol_indices_from_pce` (up to floating-point summation order).
+//! For the same fitted PCE, first- and total-order indices use the same
+//! coefficient grouping as `sobol_indices_from_pce`. Pairwise indices and
+//! per-order fractions provide additional detail. These describe the
+//! fitted polynomial; truncation and fit errors affect their accuracy
+//! for the original model.
 //!
 //! # References
 //!
-//! - Rabitz et al. 1999. General foundations of HDMR.
-//! - Li et al. 2001. RS-HDMR via orthogonal polynomials.
-//! - Sudret 2008. PCE-based Sobol' indices (Eq 36-39).
+//! - [Xiu and Karniadakis (2002)](https://doi.org/10.1137/S1064827501387826),
+//!   Table 4.1, identifies probability-matched orthogonal families.
+//! - [Li, Rosenthal and Rabitz (2001)](https://doi.org/10.1021/jp010450t),
+//!   "High Dimensional Model Representations," provides the HDMR background.
+//! - [Sudret (2008)](https://doi.org/10.1016/j.ress.2007.04.002),
+//!   §5.4, Eqs. 51 and 53, derives PCE-based indices.
+//!   The present routine uses a full PCE regression, not a separate
+//!   implementation of the component-fitting algorithms in the HDMR paper.
 
 #![allow(clippy::similar_names, clippy::cast_precision_loss)]
 
@@ -43,7 +41,7 @@ use salib_core::Problem;
 use salib_surrogate::{fit_full_pce, norm_squared, PceError, PolynomialChaos, PolynomialFamily};
 use thiserror::Error;
 
-/// Result of RS-HDMR variance decomposition.
+/// Result of PCE-based HDMR variance decomposition.
 ///
 /// Contains the fitted PCE, first- and second-order Sobol' indices,
 /// total-order indices, and per-interaction-order variance fractions.
@@ -104,8 +102,8 @@ pub enum HdmrError {
     /// PCE fit failed (delegated from `salib-surrogate`).
     #[error("PCE fit failed: {0}")]
     PceFitFailed(#[from] PceError),
-    /// Factor distribution has infinite support and no matching
-    /// polynomial family (Legendre requires finite `[lo, hi]`).
+    /// Factor distribution has no supported probability-matched
+    /// polynomial family and canonical mapping (only Uniform/Normal supported).
     #[error("factor {index} has unsupported distribution for HDMR: {reason}")]
     UnsupportedDistribution {
         /// Zero-based factor index.
@@ -115,7 +113,7 @@ pub enum HdmrError {
     },
 }
 
-/// RS-HDMR via PCE decomposition.
+/// HDMR variance decomposition of a fitted PCE.
 ///
 /// Fits a full polynomial chaos expansion to `(x, y)` data, then
 /// decomposes the PCE coefficients by interaction order to produce
@@ -126,16 +124,18 @@ pub enum HdmrError {
 /// * `x` — `N × d` sample matrix in the physical domain (each
 ///   factor's support).
 /// * `y` — model output vector of length `N`.
-/// * `problem` — defines factor distributions (for canonical-domain
-///   mapping + family selection).
-/// * `max_order` — maximum interaction order to track (2 = up to
-///   pairwise).
+/// * `problem` — defines factor distributions. The current mapping is
+///   valid for independent Uniform and Normal factors only; see module docs.
+/// * `max_order` — maximum order reported in `order_variance`.
+///   Higher-order terms remain in the fit and total-order indices.
 /// * `max_degree` — PCE polynomial truncation degree.
 ///
 /// # Errors
 ///
-/// - [`HdmrError::PceFitFailed`] — delegated from `fit_full_pce`.
+/// - [`HdmrError::PceFitFailed`] — delegated from `fit_full_pce`, or
+///   [`PceError::NonFiniteFit`] if variance contributions overflow.
 /// - [`HdmrError::ZeroVariance`] — total PCE variance is zero.
+/// - [`HdmrError::UnsupportedDistribution`] — factor is not Uniform or Normal.
 pub fn estimate_hdmr(
     x: ArrayView2<'_, f64>,
     y: &[f64],
@@ -146,23 +146,37 @@ pub fn estimate_hdmr(
     let d = problem.dim();
     let n = x.nrows();
 
-    // Choose polynomial families and validate canonical-domain mapping.
+    if x.ncols() != d {
+        return Err(PceError::FamiliesDimMismatch {
+            families_len: d,
+            d: x.ncols(),
+        }
+        .into());
+    }
+    if y.len() != n {
+        return Err(PceError::ShapeMismatch {
+            x_rows: n,
+            y_len: y.len(),
+        }
+        .into());
+    }
+
+    // Choose only probability-matched families (Xiu/Karniadakis, Table 4.1).
     let mut families = Vec::with_capacity(d);
     for (j, f) in problem.factors().iter().enumerate() {
         match f.distribution {
             salib_core::Distribution::Normal { .. } => {
                 families.push(PolynomialFamily::Hermite);
             }
-            _ => {
-                let (lo, hi) = f.distribution.support();
-                if !lo.is_finite() || !hi.is_finite() {
-                    return Err(HdmrError::UnsupportedDistribution {
-                        index: j,
-                        reason: format!("Legendre requires finite support, got ({lo}, {hi})"),
-                    });
-                }
+            salib_core::Distribution::Uniform { .. } => {
                 families.push(PolynomialFamily::Legendre);
             }
+            _ => return Err(HdmrError::UnsupportedDistribution {
+                index: j,
+                reason:
+                    "only Uniform and Normal factors have supported probability-matched mappings"
+                        .into(),
+            }),
         }
     }
 
@@ -214,6 +228,9 @@ pub fn estimate_hdmr(
         .map(|(_, &c)| c)
         .sum();
 
+    if !total_variance.is_finite() {
+        return Err(PceError::NonFiniteFit.into());
+    }
     if total_variance < 1e-15 {
         return Err(HdmrError::ZeroVariance);
     }

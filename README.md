@@ -1,32 +1,26 @@
 # salib
 
-Global sensitivity analysis for Rust, implemented from the primary literature.
-20+ methods cover variance attribution, screening, distributional changes,
-gradients, regression, and surrogates.
+Global sensitivity analysis for Rust. salib estimates how uncertain inputs
+affect a model's output, using Sobol' indices, Morris screening, FAST, PAWN,
+regression, polynomial surrogates, and other methods from the published literature.
 
-## Why salib?
+Pass a Rust function to an estimator, or generate a sampling design and analyze
+the outputs from an external simulator. Each design type records the layout its
+estimator needs. `ProblemBuilder` checks input distributions and factor groups.
 
-For a model already written in Rust, salib keeps sampling and estimation in
-compiled code without a Python boundary. Compared with using Python SALib:
+With the same binary, platform, inputs, RNG state, and reproducible model,
+results are bit-for-bit identical across thread counts. See
+[internals](docs/internals.md) for the reduction order and RNG behavior, and
+[benchmarks](docs/benchmarks.md) for measured runtimes.
 
-- **Native execution:** model closures and array operations run in Rust;
-  [benchmarks](docs/benchmarks.md) describe measured costs and their scope.
-- **Typed designs:** separate Saltelli, Owen, Morris, and FAST types make the
-  expected sampling layout explicit; `ProblemBuilder` validates input parameters.
-- **Bit-reproducibility:** identical inputs and `RngState` produce identical bits
-  across thread counts for the same binary and platform, with a reproducible model.
-- **Verification:** analytic references, metamorphic oracles, bounded Kani proofs,
-  and Stateright state exploration check different classes of implementation errors.
-
-Choose Python SALib when its Python ecosystem suits your workflow. salib offers
-similar method families with Rust APIs; it does not promise identical Python
-samples or numerical results.
+salib covers many of the same methods as Python SALib, but its samples and
+numerical results can differ.
 
 ## Quickstart
 
-Estimate which of three independent inputs explains the Ishigami model’s output
-variance. The third input matters only through an interaction, making it a useful
-example of why both first-order (`S1`) and total-effect (`ST`) indices matter.
+This example estimates Sobol' indices for the three-input Ishigami function.
+Its third input affects the output only through an interaction, which appears
+in the total-effect index (`ST`) but not the first-order index (`S1`).
 
 ```toml
 [dependencies]
@@ -102,53 +96,41 @@ interop features. See the [crate map](docs/crates.md) for dependency details.
 [API reference](https://docs.rs/salib/latest/salib/) ·
 [Bit-reproducibility contract](docs/internals.md)
 
+The [literature audit](papers/2026-10-07-literature-audit.md) records corrected
+numerical defects, reproducible checks, and remaining approximation limits.
+See the [0.3.0 release notes](docs/release-0.3.0.md) for behavior changes and
+supported inputs.
+
 ## Testing
 
-There is no formal specification to conform to — salib implements methods
-from published papers, and its correctness is measured against those papers.
-The test suite reflects that reality.
+The tests compare estimates with analytic results for Ishigami, the Sobol'
+G-function, and other models in `salib-validation`, allowing for sampling error.
+The formulas and assumptions come from the papers listed in the
+[bibliography](docs/bibliography.md).
 
-Estimators are validated against closed-form analytic results. The
-Ishigami function, Sobol' G-function, and other canonical test problems
-have exact Sobol' indices known in closed form; we compute estimates from
-samples and check they land within Monte Carlo tolerance of the published
-values. This is the primary correctness gate — `salib-validation` provides
-the reference values.
+Another 28 tests check mathematical relations between runs: scaling the output
+should preserve Sobol' indices, reordering factors should reorder their indices,
+and additive models should have zero interaction terms within sampling error.
+Sampler tests check LHS strata, Sobol' sequences, and Saltelli matrix layout.
+Reproducibility tests compare result bits across thread counts.
 
-But exact expected values only catch gross errors. The more insidious
-failures are silent: a normalization that drifts under scaling, an index
-that swaps under factor reordering, a variance formula that collapses on
-large-offset inputs. To catch those, the suite also exercises metamorphic
-oracles — mathematical identities that must hold between runs with
-different inputs but related structure. Scale the output by a constant and
-every Sobol' index should be unchanged. Permute the design columns and the
-indices should permute with them. Feed in a purely additive model and the
-interaction terms should vanish. These relations require no ground truth:
-they are properties of the math itself, verified against the code's own
-outputs.
-
-The suite includes 28 metamorphic oracles. Bounded Kani verification found
-four bugs that now have fixes and regression tests; four Stateright models
+Kani's bounded checks found four bugs, now covered by fixes and regression
+tests. Two post-fix proofs passed; the uniform-quantile and percentile
+monotonicity proofs timed out and remain inconclusive. Four Stateright models
 check problem construction, RNG use, Saltelli assembly, and estimator
-completeness. These checks cover specific invariants, not a proof of every
-estimator’s statistical correctness. The former TCK has been retired.
-
-On top of that, structural tests pin down the sampling machinery — LHS
-stratification, Sobol' canonical sequences, Saltelli matrix construction —
-and bit-reproducibility tests confirm that the same seed produces the same
-bits regardless of thread count.
+completeness within finite domains. These checks cover the stated properties;
+they do not prove every estimator correct for every model.
 
 Run the full suite with `cargo test --workspace`. During development,
 `cargo test -p salib-estimators <pattern>` scopes the run to the relevant estimator.
 
-The testing strategy lives in `docs/test-modernization-plan.md`. Deeper
-analyses — every metamorphic relation, float hazard, formal verification
-target, and type-level constraint opportunity — are catalogued in
-`docs/analysis/`.
+See the [testing plan](docs/test-modernization-plan.md) and
+[analysis reports](docs/analysis/) for the test rationale and verification results.
 
 ## Requirements
 
-Rust 1.87 or later; edition 2021.
+Rust 1.87 for the default and `full` analysis features; edition 2021.
+Fresh dependency resolution for optional `polars` currently requires Rust 1.88.
 
 ## License
 

@@ -1,14 +1,13 @@
 # Quickstart
 
-This tutorial estimates how three independent uncertain inputs contribute to the
-variance of a scalar model output. You will build a sampling design, evaluate
-Ishigami on the correct input ranges, interpret the indices, and add intervals.
+Estimate Sobol' indices for the Ishigami function, then add bootstrap
+confidence intervals. The example has three independent inputs and one output.
 
 ## 1. Add the dependency
 
 ```toml
 [dependencies]
-salib = "0.2"
+salib = "0.3"
 ```
 
 The default features provide core types, samplers, estimators, and parallel
@@ -23,8 +22,8 @@ $$f(\mathbf{x}) = \sin(x_1) + 7\sin^2(x_2) + 0.1x_3^4\sin(x_1).$$
 
 `ProblemBuilder::factor` records a name and distribution in column order.
 `build()` checks for invalid parameters, duplicate names, and invalid groups.
-The `Problem` describes the experiment; it does **not** automatically transform
-a sampler’s output. That transformation is explicit in step 4.
+The `Problem` stores these definitions. In step 4, the model closure uses them
+to transform the sampler's unit-cube coordinates into physical input values.
 
 ## 3. Construct the sampling design
 
@@ -93,7 +92,8 @@ same row order, and `fab[i]` must correspond to hybrid matrix `a_b[i]`.
 
 ## 5. Interpret the results
 
-Compare estimates with these **analytic targets**, not exact expected output:
+The exact indices are below. Your estimates will differ because they use a
+finite sample:
 
 | Factor | First-order $S_i$ | Total-effect $S_{Ti}$ |
 |---|---:|---:|
@@ -106,7 +106,7 @@ about 31% of total output variance under these input distributions. It is not a
 31% change in output when you change $x_1$, and it does not imply causality.
 
 $S_{T1}\approx0.56$ includes every interaction involving $x_1$.
-The gap $S_{T1}-S_1\approx0.24$ is its aggregate interaction contribution.
+The gap $S_{T1}-S_1\approx0.24$ is the variance share from those interactions.
 For $x_2$, equal first-order and total-effect indices indicate a main effect
 with no interaction in this model. $x_3$ has no main effect but participates in
 the $x_1,x_3$ interaction: discarding it based only on $S_3$ would be a mistake.

@@ -58,14 +58,16 @@ mod metamorphic_statistical {
                     .collect();
                 // A sorted linear response is a sawtooth: 32 harmonics
                 // keep spectral truncation below the statistical tolerance.
-                let fields = [a.first_order,
+                let fields = [
+                    a.first_order,
                     a.total_order,
                     estimate_jansen(&m, f).first_order,
                     estimate_janon(&m, f).first_order,
                     estimate_owen(&o, f).first_order,
                     ft.s,
                     estimate_given_data_sobol(x.view(), &y).unwrap().s1,
-                    estimate_rbd_fast(x.view(), &y, 32).unwrap().s];
+                    estimate_rbd_fast(x.view(), &y, 32).unwrap().s,
+                ];
                 let want = [
                     t * t / (t * t + 13.0),
                     4.0 / (t * t + 13.0),

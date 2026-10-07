@@ -1,69 +1,20 @@
-//! DGSM — Derivative-based Global Sensitivity Measure. Computes
-//! `νᵢ = E[(∂f/∂xᵢ)²]` and the Poincaré-inequality upper bound
-//! `Sᵀᵢ ≤ νᵢ · C_P(xᵢ) / Var(Y)` per Sobol-Kucherenko 2009.
+//! Derivative-based global sensitivity measures (DGSM).
 //!
+//! Computes the sampled mean squared derivative νᵢ and the plug-in bound
+//! C_P(μᵢ) νᵢ / Var(Y). For independent inputs and suitable differentiability
+//! and integrability conditions, the population quantity bounds the total-effect
+//! Sobol' index. Sampling and finite-difference errors are not covered by that
+//! inequality; an estimated bound is not a certified upper confidence limit.
 //!
+//! [`estimate_dgsm`] takes an `(N,d)` gradient view, one Poincaré constant per
+//! factor, and the output variance. Obtain gradients analytically, from your
+//! solver, or through [`finite_difference_gradients`]. [`poincare_constant`]
+//! supplies constants for uniform and normal distributions.
 //!
-//! # The Poincaré link to total-order Sobol'
-//!
-//! For a factor `Xᵢ` with input distribution `μᵢ` and Poincaré
-//! constant `C_P(μᵢ)`, the Poincaré inequality states
-//!
-//! ```text
-//! Var_{Xᵢ}(g(Xᵢ)) ≤ C_P(μᵢ) · E[(g'(Xᵢ))²]
-//! ```
-//!
-//! Applying this to the Sobol' decomposition gives
-//!
-//! ```text
-//! V_Tᵢ ≤ C_P(μᵢ) · νᵢ,
-//! ```
-//!
-//! and dividing by `Var(Y)` yields the upper bound on `Sᵀᵢ`. The
-//! bound is **provable**, not just empirical — a factor with
-//! `νᵢ · C_P / Var(Y) < δ` contributes provably less than `δ` to
-//! total variance. This is the formal link to workspace's GUM
-//! contribution analysis.
-//!
-//! # Inputs
-//!
-//! [`estimate_dgsm`] takes:
-//!
-//! - `gradients: Array2<f64>` of shape `(N, d)` — gradient `∇f` at
-//!   each sample. Caller chooses the gradient source: analytical
-//!   (closure → derivative), automatic-differentiation (e.g.,
-//!   `dual_num` / `enzyme`), or finite-difference via
-//!   [`finite_difference_gradients`].
-//! - `poincare_constants: &[f64]` of length `d` — `C_P(μᵢ)` per
-//!   factor. Use [`poincare_constant`] to derive these from a
-//!   `Distribution`.
-//! - `var_y: f64` — total variance `Var(Y)` over the sample set.
-//!   Caller computes via `salib_core::tree_var` for bit-reproducibility.
-//!
-//! # Why caller-supplied gradients (not enum)
-//!
-//! The literature proposes
-//!
-//! ```text
-//! enum DgsmGradient {
-//!     Analytical(closure),
-//!     Adjoint(closure),
-//!     FiniteDifference { eps, kind },
-//! }
-//! ```
-//!
-//! In Rust, an enum-of-closures with different shapes is awkward
-//! and the Adjoint variant is just Analytical with a different
-//! name. Cleaner: take `gradients: &Array2<f64>` directly (caller
-//! computes via whatever method). Forward / central FD live as a
-//! helper [`finite_difference_gradients`]. Complex-step FD and
-//! Adjoint
-//!
-//! # Bit-reproducibility
-//!
-//! Pure under `(gradients, poincare_constants, var_y)`. All sums
-//! route through `salib_core::tree_sum`. Same inputs in →
-//! bit-identical `DgsmIndices` out.
+//! See [Sobol' and Kucherenko (2009)](https://doi.org/10.1016/j.matcom.2009.01.023)
+//! and [Roustant, Barthe and Iooss (2017), §1](https://arxiv.org/abs/1612.03689).
+//! Computations use fixed-order sums; reproducibility assumes the same inputs,
+//! binary, and platform.
 
 #![allow(
     clippy::similar_names,
@@ -88,11 +39,10 @@ use salib_core::{tree_sum, Distribution};
 pub struct DgsmIndices {
     /// `νᵢ = E[(∂f/∂xᵢ)²]` per factor. Always `≥ 0`.
     pub vi: Vec<f64>,
-    /// Poincaré upper bound on `Sᵀᵢ`: `νᵢ · C_P(xᵢ) / Var(Y)`. May
-    /// exceed `1.0` — the inequality is one-sided and the bound
-    /// can be loose, especially for distributions with large
-    /// Poincaré constants. A factor with `st_upper < δ`
-    /// **provably** contributes < δ to total variance.
+    /// Plug-in estimate of `νᵢ · C_P(xᵢ) / Var(Y)`, which bounds `Sᵀᵢ`
+    /// when population quantities satisfy the Poincaré assumptions.
+    /// This estimate may exceed one and has sampling and derivative error;
+    /// `st_upper < δ` alone does not certify that the total effect is below δ.
     pub st_upper: Vec<f64>,
 }
 

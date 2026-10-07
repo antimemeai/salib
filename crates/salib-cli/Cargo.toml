@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = """
-CLI binary for salib: sample, run, and analyze sensitivity analyses.
+Reserved CLI package for salib; sampling and analysis commands are not yet implemented.
 """
 
 [[bin]]

@@ -54,7 +54,7 @@ replicate API in this release.
 
 ## Saltelli 2010
 
-[Saltelli et al. (2010)](../bibliography.md#saltelli2010).
+[Saltelli et al. (2010)](https://doi.org/10.1016/j.cpc.2009.09.018).
 
 With $D$ the estimated output variance, the implementation uses
 
@@ -78,7 +78,7 @@ upper triangle. Computing these pairwise estimates adds $O(Nd^2)$ analysis work.
 
 ## Jansen 1999
 
-[Jansen (1999)](../bibliography.md#jansen1999).
+[Jansen (1999)](https://doi.org/10.1016/S0010-4655%2898%2900154-4).
 
 The implemented first-order complement is
 
@@ -96,7 +96,7 @@ println!("S1: {:?}", indices.first_order);
 
 ## Janon 2014
 
-[Janon et al. (2014)](../bibliography.md#janon2014).
+[Janon et al. (2014)](https://doi.org/10.1051/ps/2013040).
 
 The symmetrized pick-freeze estimator pairs $Y=f(B)$ with
 $Y^{(i)}=f(A_B^{(i)})$, which share input $i$. Let
@@ -105,8 +105,9 @@ $\bar Y_2=(\bar Y+\bar Y^{(i)})/2$. Then
 $$\hat S_i=\frac{N^{-1}\sum_jY_jY_j^{(i)}-\bar Y_2^2}
 {(2N)^{-1}\sum_j(Y_j^2+(Y_j^{(i)})^2)-\bar Y_2^2}.$$
 
-The paper establishes asymptotic efficiency under its assumptions; this does not
-promise the best finite-sample estimate for every model. The result returns
+Janon et al., Propositions 3.2–3.5, establish asymptotic results for i.i.d.
+exchangeable pick-freeze pairs with a finite fourth output moment. They do not
+establish finite-sample superiority or apply automatically to deterministic QMC. The result returns
 first-order indices and optional pairwise indices, without a total-effect vector.
 
 ```rust
@@ -116,7 +117,7 @@ let indices = estimate_janon(&saltelli, ishigami_unit);
 
 ## Owen 2013
 
-[Owen (2013)](../bibliography.md#owen2013).
+[Owen (2013)](https://doi.org/10.1145/2457459.2457460).
 
 Owen’s Correlation 2 estimator targets small **first-order** indices with a
 three-vector design. `OwenMatrix` stores $A,B,C$, $A_C^{(i)}$, and $B_A^{(i)}$.
@@ -136,7 +137,7 @@ as well, reporting $N(3+2d)$. Do not pass a Saltelli design to this API.
 
 ## Given-data Sobol'
 
-[Plischke et al. (2013)](../bibliography.md#plischke2013).
+[Plischke et al. (2013)](https://doi.org/10.1016/j.ejor.2012.11.047).
 
 When rerunning the model is impossible, partition the existing data by each input
 and estimate conditional means. This provides approximate first-order indices,
@@ -148,7 +149,11 @@ use salib::estimators::estimate_given_data_sobol;
 let indices = estimate_given_data_sobol(x.view(), &y).unwrap();
 ```
 
-Partition choice and sample count affect bias and resolution. Under input
+The implementation caps the partition at 48 classes. More rows improve
+estimates within those classes but do not remove the conditioning error.
+For example, a factor whose effect oscillates within each class may appear
+unimportant even when it determines the output. Tied inputs are split by row
+order, so discrete-input results may also depend on row ordering. Under input
 dependence, the measure combines model response with input association. Shapley
 theory permits dependent-input attribution, but salib’s current Shapley API only
 supports independent inputs.

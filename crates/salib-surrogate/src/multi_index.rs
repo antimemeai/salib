@@ -15,23 +15,21 @@
 //! ```
 //!
 //! For `d = 3, p = 4`: `35` indices. For `d = 10, p = 4`:
-//! `1001`. For `d = 20, p = 5`: `53130` — already in the regime
-//! where sparse-LARS truncation  becomes essential.
+//! `1001`. For `d = 20, p = 5`: `53130`. The basis can grow quickly
+//! even at moderate degrees.
 //!
-//! # Hyperbolic truncation (deferred)
+//! # Hyperbolic truncation
 //!
-//! Blatman-Sudret 2011 generalize to "hyperbolic" `q`-norm
+//! [Blatman and Sudret (2011)](https://doi.org/10.1016/j.jcp.2010.12.021)
+//! introduce hyperbolic `q`-norm
 //! truncation `|α|_q := (Σ αⱼ^q)^{1/q} ≤ p` with `q ∈ (0, 1]`
-//! to favor low-interaction terms. Lands in alongside the
-//! sparse-LARS solver.
+//! to favor terms involving fewer inputs. [`enumerate_hyperbolic`]
+//! constructs this basis. For `q < 1`, the expression is a quasi-norm.
 
 #![allow(clippy::cast_precision_loss)]
 
 /// A multi-index `α ∈ ℕ^d`. `indices[i]` is the polynomial degree
 /// in factor `i`'s univariate basis.
-///
-/// `#[non_exhaustive]` — future fields (e.g., `cached_norm_squared`
-/// for performance) land non-breaking.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
@@ -73,7 +71,7 @@ impl MultiIndex {
     }
 
     /// Active factors — indices `i` where `αᵢ > 0`. Used by
-    /// Sudret 2008 Eq 39 to determine which factor's Sobol' index
+    /// Sudret 2008, §5.4 to determine which factor's Sobol' index
     /// the multi-index contributes to.
     #[must_use]
     pub fn active_factors(&self) -> Vec<usize> {
@@ -195,11 +193,9 @@ fn hyperbolic_norm(alpha: &[usize], q: f64) -> f64 {
 /// terms (favoring sparsity for high-`d` PCE workloads).
 ///
 /// The implementation enumerates the total-degree basis and filters
-/// — total-degree is a strict superset of hyperbolic for `q ≤ 1`,
-/// so this is correct and `O(|total-degree basis|)` work for the
-/// enumeration, which is acceptable since hyperbolic is the
-/// regime where total-degree is feasible to enumerate but ill-
-/// suited as a sparse-PCE basis.
+/// it. The total-degree set contains the hyperbolic set and equals it
+/// at `q = 1`. Work is `O(d · |total-degree basis|)`, so a small retained
+/// basis does not avoid the cost of enumerating the larger candidate set.
 ///
 /// # Errors
 ///

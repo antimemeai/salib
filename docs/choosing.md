@@ -4,16 +4,16 @@ Choose the quantity you want to measure before choosing an algorithm. A factor
 can have a small main effect and a large interaction effect; a change in a tail
 quantile can be important even when it barely changes variance.
 
-## Start with the data and the question
+## Data and purpose
 
 1. **Do you have only existing $(X,Y)$ observations?** Use given-data Sobol',
-   PAWN, Borgonovo δ, QOSA, RBD-FAST, or regression. These consume aligned
+   PAWN, Borgonovo δ, QOSA, RBD-FAST, or regression. These take aligned
    input/output rows. You cannot apply a designed-sample Saltelli estimator to
    arbitrary observations. Observational sensitivity is an association under the
    observed input distribution, not causal attribution.
-2. **Can you run the model, but many inputs compete for a small budget?** Start
+2. **Do you need to screen many inputs with a small budget?** Start
    with Morris screening. With gradients already available, DGSM can be a useful
-   alternative. Follow screening with quantitative attribution for retained
+   alternative. Then estimate sensitivity indices for the retained
    factors; fixing discarded factors changes the experiment being analyzed.
 3. **Do you want shares of output variance for independent inputs?** Use Saltelli
    2010 with a Saltelli design, optionally comparing Jansen main effects. Include total effects to detect inputs
@@ -25,19 +25,18 @@ quantile can be important even when it barely changes variance.
 5. **Do you care about a particular output quantile?** Use QOSA at the chosen
    quantile level. It measures quantile-oriented sensitivity, not exceedance
    probability directly; sparse tails need substantially more observations.
-6. **Is the simulator too expensive for a large direct campaign?** Consider PCE
-   if a polynomial surrogate can predict held-out outputs well. Derive indices
-   from that fit only after validating approximation error under your input law.
+6. **Are model evaluations expensive?** Consider PCE
+   if a polynomial surrogate can predict held-out outputs well. Automatic HDMR mapping supports only independent Uniform/Normal inputs. Derive indices
+   from that fit only after validating approximation error under your input distributions.
 
 For **dependent inputs**, ordinary independent-input Sobol' decompositions lose
 their usual interpretation, and column swaps can create implausible combinations.
 Shapley theory can handle dependence, but **salib's current Shapley implementation
-samples independent marginals only**. It is not a correlated-input solution.
-Iman–Conover can build correlated samples; it does not supply a dependent-input
+samples independent marginals only**. Iman–Conover can build correlated samples; it does not supply a dependent-input
 attribution estimator. PAWN or regression can summarize associations in dependent
 data, with interpretation tied to the joint distribution.
 
-## Match the measure to the assumptions
+## Measures and assumptions
 
 | Measure | Appropriate question | Main limitation |
 |---|---|---|
@@ -70,7 +69,7 @@ components as continuous-input Sobol' indices without matching the design assump
 - **FAST/eFAST:** frequency designs offer first-order indices and, for eFAST,
   total effects. Respect the harmonic/sample-size constraints of the constructor.
 - **RBD-FAST:** first-order estimates from a single input/output dataset; useful
-  when you cannot afford the extra Saltelli blocks. It does not recover total effects.
+  when you cannot afford the extra Saltelli blocks. Inputs must be finite and untied; tied columns are rejected. It does not recover total effects.
 
 ## Evaluation budget and analysis cost
 
@@ -102,10 +101,11 @@ matrix fitting, and bootstrap repeats can dominate. See
 
 ## Sample size: start, measure, increase
 
-These are pilot budgets, not accuracy guarantees. Smoothness, effective dimension,
-interactions, noise, and the required error tolerance determine the final size.
+Use these sample sizes for an initial run, then increase them until the
+estimates are stable enough for your purpose. Required sizes depend on the
+model's smoothness, effective dimension, interactions, and noise.
 
-| Campaign | Starting point | What to check before accepting it |
+| Analysis | Starting point | What to check |
 |---|---|---|
 | Morris screening | 10–20 trajectories; even grid levels such as 4 or 6 | Rankings and $\mu^*,\sigma$ stability across more trajectories / seeds |
 | Sobol' with QMC | $N=1024$ or 4096, then double | Main and total effects stabilize at the precision you report |
@@ -117,8 +117,8 @@ interactions, noise, and the required error tolerance determine the final size.
 For example, with $d=20$ and a budget of 5000 calls, Saltelli permits only
 $\lfloor5000/22\rfloor=227$ base rows, while 20 Morris trajectories cost 420
 calls. Screening may be more useful than reporting unstable quantitative indices.
-A sparse PCE fit has no universal “2–5 samples per factor” guarantee: active basis
-size and model complexity determine the training requirement.
+For sparse PCE, choose the training size based on the number of active basis
+terms and prediction error, rather than a fixed number of samples per factor.
 
 Bootstrap intervals add no model calls when outputs are cached. Try 200 resamples
 while developing and 1000 when assessing interval stability; increase $N$ if

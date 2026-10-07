@@ -1,65 +1,43 @@
-//! Active subspaces (Constantine-Dow-Wang 2014) — gradient-based
-//! dimension reduction for global sensitivity analysis.
+//! Active subspaces from sampled gradients.
 //!
-//! # The covariance-of-gradients matrix
-//!
-//! For a model `f : ℝ^d → ℝ` with gradient `∇f(x)`, define the
-//! `(d × d)` symmetric positive-semidefinite matrix
+//! For a differentiable scalar model with square-integrable gradients,
+//! define the uncentered gradient second-moment matrix:
 //!
 //! ```text
-//! C = E[(∇f) (∇f)ᵀ]                                    (Constantine 2014 Eq 2.3)
+//! C = E[(∇f)(∇f)ᵀ] = W Λ Wᵀ,    λ_1 ≥ … ≥ λ_d ≥ 0
 //! ```
 //!
-//! and its eigendecomposition `C = W Λ Wᵀ` with `λ_1 ≥ … ≥ λ_d ≥ 0`.
-//! Constantine 2014 Lemma 2.1 gives the geometric reading:
-//! `λ_i = E[((∇f)ᵀ wᵢ)²]` is the mean-squared directional derivative
-//! along eigenvector `w_i`. Large `λ_i` ⇒ the function varies a lot
-//! along `w_i`; near-zero `λ_i` ⇒ `f` is approximately invariant
-//! along `w_i`.
+//! Each eigenvalue is the mean squared directional derivative along
+//! its eigenvector ([Constantine, Dow and Wang
+//! 2014](https://arxiv.org/pdf/1304.2070), Eq. 2.3 and Lemma 2.1).
+//! The leading eigenvectors span the chosen active subspace. A spectral
+//! gap helps choose a dimension; it does not establish surrogate accuracy.
+//! The conditional-mean approximation bound in their Theorem 3.1 depends
+//! on the sum of discarded eigenvalues and a domain/measure constant.
 //!
-//! The "active subspace" is the span of the leading `k_active`
-//! eigenvectors — directions in input space where the model varies
-//! most. Eigenvalue gaps in the spectrum identify when a clean
-//! reduced-dimension representation exists.
+//! # Estimation
 //!
-//! # Monte Carlo estimator
+//! Given gradient rows sampled under the intended input distribution,
+//! the estimator forms `C̃ = gradientsᵀ gradients / M` (Eq. 2.16) and
+//! eigendecomposes it. Cost is `O(M d² + d³)`. Choose input units or
+//! scaling before computing gradients: changing coordinates changes C.
 //!
-//! Per Constantine 2014 Eq 2.16:
+//! Callers supply analytic or numerical gradients. The result contains
+//! eigenvalues, eigenvectors, and a suggested dimension; it does not fit
+//! a response surface or quantify gradient and sampling uncertainty.
 //!
-//! ```text
-//! C̃ = (1/M) Σⱼ (∇f_j) (∇f_j)ᵀ                              (M gradient samples)
-//! ```
+//! # Dimension heuristic
 //!
-//! Equivalently, with `gradients ∈ ℝ^{M × d}` (rows are sampled
-//! gradients), `C̃ = (1/M) gradientsᵀ · gradients`. Eigendecompose
-//! `C̃` via `nalgebra::SymmetricEigen`.
+//! The largest adjacent eigenvalue ratio and the relative numerical-zero
+//! tolerance are choices made by this implementation. They are not an
+//! error bound. With fewer gradient samples than inputs, sample rank is
+//! at most `M`; zero sample eigenvalues need not imply inactive directions
+//! in the model.
 //!
-//! Constantine 2014 Eq 2.17-2.18 gives an SVD-form alternative
-//! (`G = (1/√M) [∇f_1, …, ∇f_M]` ∈ ℝ^{d × M}, then SVD); we use the
-//! direct eigendecomposition because `d` is the bound on cost
-//! (`O(d³)` for the eigensolve) and `d ≤ a few hundred` is the
-//! typical workload — eigendecomposition matches that profile, and
-//! the closed form aligns more naturally with the GSA framing.
-//!
-//! # Caller interface
-//!
-//! Caller computes gradients (e.g., via
-//! [`salib_estimators::finite_difference_gradients`](https://docs.rs/salib-estimators/latest/salib_estimators/fn.finite_difference_gradients.html) or
-//! analytical) and passes the `(M, d)` matrix to
-//! [`compute_active_subspace`]. The function returns the full
-//! eigendecomposition plus a heuristic active-subspace dimension
-//! `k_active` from the largest eigenvalue gap.
-//!
-//! # Special cases (Constantine 2014 § 2.1)
-//!
-//! - **Ridge function `f(x) = h(aᵀx)`**: `C` is rank-1; leading
-//!   eigenvector is `a / ||a||`. A single gradient evaluation
-//!   suffices, but our MC estimator handles `M ≥ d` samples
-//!   uniformly.
-//! - **Quadratic form `f(x) = h(xᵀ A x)`**: `null(C) = null(A)` when
-//!   `h'` is non-degenerate (Eq 2.14).
-//!
-//! Both cases are pinned in the unit-test surface.
+//! For a nonconstant ridge function `f(x) = h(aᵀx)`, C has rank one
+//! when `E[h'(aᵀx)²] > 0`. Its leading eigenvector is `±a/||a||`.
+//! A nonzero sampled gradient identifies that direction, but gradients
+//! sampled where `h'` vanishes provide no such information.
 
 #![allow(
     clippy::similar_names,
@@ -72,9 +50,6 @@ use nalgebra::{DMatrix, SymmetricEigen};
 use ndarray::{Array2, ArrayView2};
 
 /// Result of an active-subspace computation.
-///
-/// `#[non_exhaustive]` — future fields (per-sample gradient
-/// residuals, bootstrap CIs over eigenvalues) land non-breaking.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
@@ -129,7 +104,7 @@ pub enum ActiveSubspaceError {
 ///
 /// `gap_threshold` controls active-subspace dimension detection:
 ///
-/// - `None` — Constantine's default, take `k = argmax_j (λ_j / λ_{j+1})`.
+/// - `None` — take `k = argmax_j (λ_j / λ_{j+1})`.
 /// - `Some(t)` (`t > 1`) — require the largest eigenvalue ratio
 ///   to be ≥ `t` to qualify as a gap. If no ratio meets the
 ///   threshold, `k_active = d` (no detected active subspace, all
@@ -138,16 +113,15 @@ pub enum ActiveSubspaceError {
 /// Perfect-gap short-circuit: if `λ_{j+1} ≤ 1e-12 · λ_max` (a
 /// numerically-zero eigenvalue follows a non-zero one), `k_active`
 /// is committed at that `j+1` regardless of `gap_threshold`. This
-/// handles ridge / low-rank cases (Constantine 2014 § 2.1)
-/// deterministically without depending on infinity arithmetic in
-/// the largest-ratio scan.
+/// avoids dividing by a nearly zero eigenvalue. It identifies numerical
+/// rank in the sample matrix, not a proven rank of the population matrix.
 ///
 /// # Errors
 ///
 /// - [`ActiveSubspaceError::EmptyGradients`] if `gradients.nrows() == 0`.
 /// - [`ActiveSubspaceError::ZeroD`] if `gradients.ncols() == 0`.
 /// - [`ActiveSubspaceError::InvalidGapThreshold`] if `gap_threshold = Some(t)` with `t ≤ 1`.
-/// - [`ActiveSubspaceError::NonFiniteSpectrum`] if every computed eigenvalue is NaN/Inf.
+/// - [`ActiveSubspaceError::NonFiniteSpectrum`] if any computed eigenvalue is NaN/Inf.
 pub fn compute_active_subspace(
     gradients: ArrayView2<'_, f64>,
     gap_threshold: Option<f64>,

@@ -1,9 +1,10 @@
 # salib-shapley
 
-Random-permutation Shapley effects using nested Monte Carlo from Song, Nelson,
-and Staum (2016). Depend on this crate directly to allocate interaction variance
-among **independent** inputs. Use `salib` with `shapley` for the facade API;
-use Sobol' estimators when you need separate main and total effects.
+Shapley effects allocate output variance, including interactions, among
+independent inputs. This crate implements the random-permutation, nested
+Monte Carlo algorithm of Song, Nelson, and Staum (2016). It is also available
+through `salib` with the `shapley` feature. Use Sobol' estimators if you need
+separate main and total effects.
 
 | API | Purpose |
 |---|---|
@@ -30,19 +31,22 @@ println!("variance shares: {shares:?}");
 
 ```toml
 [dependencies]
-salib-core = "0.2"
-salib-shapley = "0.2"
+salib-core = "0.3"
+salib-shapley = "0.3"
 ```
 
-This API samples physical input values from the supplied distributions itself;
-its model closure does not receive unit-cube coordinates. Validate distributions
-before use. The budget is `n_var + n_perm * n_outer * n_inner * (d-1)` model calls.
-More permutations reduce Monte Carlo uncertainty. `sh` is in output-variance
-units; divide by `var_y` for dimensionless shares. Marginal contributions
-telescope to the estimated total variance, up to rounding and tiny-negative
-clamping; individual contributions remain uncertain. Keep the model reproducible even though
-the closure accepts `FnMut`. Dependent-input conditional sampling is not
-implemented. `serde` serializes result types.
+The estimator samples physical values from the supplied distributions and
+passes them to your model. Validate those distributions before use. It requires
+`n_var + n_perm * n_outer * n_inner * (d-1)` model calls; increase the permutation
+count to reduce Monte Carlo uncertainty.
+
+`sh` is in output-variance units. Divide by `var_y` for dimensionless shares.
+The contributions sum to the estimated variance up to rounding and clamping of
+tiny negative values, though each contribution still has sampling error. For
+reproducible results, the model must return the same output for the same inputs,
+even though its closure accepts `FnMut`.
+
+Dependent inputs are not supported. `serde` serializes result types.
 
 [API reference](https://docs.rs/salib-shapley/latest/salib_shapley/).
 MIT OR Apache-2.0.

@@ -1,18 +1,16 @@
-# Derivative-Based Methods
+# Derivative-based methods
 
-Sensitivity measures derived from model gradients — upper bounds on total-effect indices without the full Saltelli design.
-
-> **When to use:** Gradient information is available or cheap (analytical, adjoint, or finite-difference). You want provable upper bounds on each factor's total contribution to output variance. Fewer model evaluations than Sobol' — $N \cdot (d + 1)$ for forward FD vs $N \cdot (d + 2)$ for Saltelli, but each evaluation includes a gradient.
-
----
+DGSM averages squared model derivatives and uses them to bound total-effect
+Sobol' indices. It is useful for screening when gradients are available from
+analytic formulas, an adjoint solver, or finite differences.
 
 ## DGSM
 
-Sobol' & Kucherenko (2009) *Math. Comp. Sim.* 79(10), 3009--3017. [[bib]](../bibliography.md#sobol-kucherenko2009)
+Sobol' & Kucherenko (2009) *Math. Comp. Sim.* 79(10), 3009--3017. [paper](https://doi.org/10.1016/j.matcom.2009.01.023) · [reference](../bibliography.md#sobol-kucherenko2009)
 
 ### Theory
 
-For a square-integrable model $f(\mathbf{x})$ with independent inputs, the **Derivative-based Global Sensitivity Measure** for factor $X_i$ is the expected squared partial derivative:
+For a square-integrable model $f(\mathbf{x})$ with independent inputs and square-integrable weak partial derivatives, the **Derivative-based Global Sensitivity Measure** for factor $X_i$ is the expected squared partial derivative:
 
 $$\nu_i = \mathbb{E}\!\left[\left(\frac{\partial f}{\partial x_i}\right)^2\right]$$
 
@@ -20,7 +18,10 @@ The Poincare inequality links $\nu_i$ to the total-effect Sobol' index. For an i
 
 $$S_{Ti} \leq \frac{C_P(\mu_i) \cdot \nu_i}{\operatorname{Var}(Y)}$$
 
-This bound is **provable**, not empirical. A factor with $\nu_i \cdot C_P / \operatorname{Var}(Y) < \delta$ contributes provably less than $\delta$ to total variance. The bound can be loose — it is one-sided and depends on the spectral gap of the input distribution — but it is sufficient for screening: factors below the threshold are safely fixed.
+The inequality bounds the population quantities under its assumptions. The
+estimator substitutes sampled gradients and an estimated output variance, so
+its result also has sampling and numerical error. A small bound can support
+screening a factor out; a large bound may simply be loose.
 
 ### Poincare constants
 
@@ -31,19 +32,21 @@ Per Roustant, Barthe & Iooss (2017), the closed-form constants for common distri
 | $\operatorname{Uniform}[a, b]$ | $(b - a)^2 / \pi^2$ |
 | $\mathcal{N}(\mu, \sigma^2)$ | $\sigma^2$ |
 
-Use `poincare_constant` to derive $C_P$ from a `Distribution`. Other distributions (Beta, Gamma, truncated families) require numerical Kummer-function solvers not yet implemented — supply the constant directly.
+Use `poincare_constant` for uniform and normal distributions. For other
+distributions it returns `PoincareError::Unsupported`; supply a suitable
+constant directly to `estimate_dgsm`.
 
 ### Gradient computation
 
 `estimate_dgsm` takes a pre-computed gradient matrix. The caller chooses the gradient source:
 
-- **Analytical** — closed-form derivative of the model. Zero extra model evaluations.
-- **Adjoint** — same interface as analytical; distinguished by the solver backend.
-- **Finite-difference** — via `finite_difference_gradients`:
-  - `FdKind::Forward`: $(f(x + \varepsilon e_i) - f(x)) / \varepsilon$, $O(\varepsilon)$ error, $N \cdot d$ extra evaluations.
-  - `FdKind::Central`: $(f(x + \varepsilon e_i) - f(x - \varepsilon e_i)) / (2\varepsilon)$, $O(\varepsilon^2)$ error, $2 N d$ extra evaluations.
+- **Analytical** — evaluate a closed-form derivative.
+- **Adjoint** — obtain gradients from your model solver.
+- **Finite difference** — call `finite_difference_gradients`:
+  - `FdKind::Forward`: $(f(x + \varepsilon e_i) - f(x)) / \varepsilon$, $O(\varepsilon)$ error, $N(d+1)$ model evaluations including the base values.
+  - `FdKind::Central`: $(f(x + \varepsilon e_i) - f(x - \varepsilon e_i)) / (2\varepsilon)$, $O(\varepsilon^2)$ error, $2Nd$ model evaluations.
 
-Typical step sizes: $\varepsilon = 10^{-6}$ for forward, $10^{-4}$ to $10^{-5}$ for central (balancing truncation vs round-off).
+Choose step sizes for the input scale and check several values: smaller steps reduce truncation error but amplify rounding and model noise. The stated error orders require sufficient smoothness.
 
 ### Code
 
@@ -79,17 +82,16 @@ println!("{indices}");
 //      2 10.9184    3.0650
 ```
 
-> **Verify** against Ishigami closed-form ($N = 4096$, seed `[0u8; 32]`, central FD with $\varepsilon = 10^{-5}$):
->
-> | Factor | $\hat{\nu}_i$ | Analytic $\nu_i$ | $\hat{S}_{Ti}^{\text{upper}}$ | Analytic $S_{Ti}$ |
-> |--------|--------------|------------------|-------------------------------|-------------------|
-> | $x_1$  | 7.7721       | 7.72             | 2.1820                        | 0.5576            |
-> | $x_2$  | 24.5001      | 24.50            | 6.8770                        | 0.4424            |
-> | $x_3$  | 10.9184      | 10.99            | 3.0650                        | 0.2437            |
->
-> All $S_{Ti}^{\text{upper}} \geq S_{Ti}$ — the Poincare bound holds. The bound is **loose** because $\operatorname{Uniform}[-\pi, \pi]$ has $C_P = 4$; the screening value is in the provable direction, not tight estimation.
+Example results against Ishigami closed-form ($N = 4096$, seed `[0u8; 32]`, central FD with $\varepsilon = 10^{-5}$):
 
----
+| Factor | $\hat{\nu}_i$ | Analytic $\nu_i$ | $\hat{S}_{Ti}^{\text{upper}}$ | Analytic $S_{Ti}$ |
+|--------|--------------|------------------|-------------------------------|-------------------|
+| $x_1$  | 7.7721       | 7.72             | 2.1820                        | 0.5576            |
+| $x_2$  | 24.5001      | 24.50            | 6.8770                        | 0.4424            |
+| $x_3$  | 10.9184      | 10.99            | 3.0650                        | 0.2437            |
+
+All estimated bounds exceed the analytic total effects in this example, but
+are too loose to identify a negligible factor.
 
 ## Choosing DGSM vs Sobol'
 
@@ -99,6 +101,9 @@ println!("{indices}");
 | Cost | $N(d+1)$ to $2Nd$ (FD) | $N(d+2)$ |
 | Gradient needed | Yes | No |
 | Interactions | Bound only | Full decomposition |
-| Correlated inputs | Same Poincare framework | Requires Shapley |
+| Input assumption here | Independent inputs with suitable Poincaré constants | Independent inputs |
 
-DGSM is a screening instrument. If the upper bound for a factor is below your tolerance, the factor is provably unimportant — fix it and reduce $d$ before running a full Sobol' analysis. If the bound is above the tolerance, DGSM cannot distinguish "genuinely important" from "loose bound" — proceed to variance-based methods.
+Use DGSM to screen factors whose estimated bounds are small relative to your
+tolerance, accounting for gradient and sampling error. A bound above the
+tolerance does not establish importance; use a direct variance-based estimate
+if you need a more precise answer.

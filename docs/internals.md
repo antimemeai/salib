@@ -1,15 +1,15 @@
 # Internals
 
 salib controls random streams and floating-point reduction order so that changing
-thread count does not change result bits. This page explains the contract and
-what a model integration must preserve.
+thread count does not change result bits. Your model must also return the same
+output for the same inputs.
 
-## Bit-reproducibility: the scope
+## Reproducing result bits
 
 For the same binary and platform, the same ordered inputs, method configuration,
-and complete `RngState` yield the same result bits across thread counts, provided
-model evaluations are reproducible. This is stronger than “equal within a
-numerical tolerance.” Compare `f64::to_bits()` when checking the contract.
+and complete `RngState` yield the same result bits across thread counts when
+model evaluations are reproducible. Compare `f64::to_bits()` to check exact
+equality.
 
 The seed is only part of the RNG state: stream and word position matter too.
 Calling a stochastic sampler twice on one mutable state usually gives different
@@ -75,7 +75,7 @@ It is not a Welford accumulator. Individual estimators may use population
 normalization ($N$) or other paper-specific formulas; `tree_var` does not define
 every estimator’s denominator.
 
-## The rayon contract for users
+## Parallel execution
 
 - Rayon chooses where chunks run; salib chooses which values combine and in
   which order. The `par_tree_*` functions retain their tree with one worker,
@@ -95,7 +95,7 @@ build that omits rayon uses the same reduction grouping:
 
 ```toml
 [dependencies]
-salib = { version = "0.2", default-features = false, features = ["samplers", "estimators"] }
+salib = { version = "0.3", default-features = false, features = ["samplers", "estimators"] }
 ```
 
 Cargo features are additive: this omits rayon only if no other dependency enables
@@ -123,7 +123,7 @@ salt select the same child. Use stable distinct salts for separate jobs; do not
 assign streams by whichever worker happens to request work first. Stream hashes
 are reproducible identifiers, not a mathematical proof of collision freedom.
 
-## Content hashes and records
+## Configuration hashes
 
 `Problem::content_hash()` and `Sampler::config_hash()` hash their serialized
 configuration using SHA-256. They identify configurations, not complete runs.
@@ -138,11 +138,10 @@ Analytic-reference tests check estimates against known answers; 28 metamorphic
 oracles check relations such as scaling invariance and factor permutations.
 Kani harnesses in core, samplers, and estimators check bounded quantile,
 reduction, Sobol' step, and percentile properties. Four discovered bugs were
-fixed with regression witnesses. Stateright explores four finite protocol models
+fixed and covered by regression tests. Stateright explores four finite protocol models
 for problem construction, RNG use, Saltelli assembly, and estimator completeness.
-Run those models with `cargo run -p salib-models --release`. The estimator collector
-models a proposed asynchronous protocol; current estimators consume synchronous
-arrays. These checks do not prove statistical accuracy for every possible model.
+Run those models with `cargo run -p salib-models --release`. The result-collection model describes a proposed asynchronous protocol.
+Current estimators read arrays synchronously. These checks do not prove statistical accuracy for every possible model.
 
 Bit-reproducibility is distinct from accuracy or convergence. It does not promise
 identical bits across CPU architectures, compiler or dependency versions,

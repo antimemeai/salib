@@ -1,2 +1,5 @@
 /target
 **/.DS_Store
+*.pdf
+/context/
+/quarantine/

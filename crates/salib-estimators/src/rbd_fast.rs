@@ -1,46 +1,18 @@
-//! RBD-FAST estimator — first-order Sobol' indices `Sᵢ` from
-//! generic `(X, Y)` data via random balance designs (Tarantola 2006)
-//! with the Plischke 2010 bias correction.
+//! First-order spectral estimates from paired input/output data.
 //!
+//! Related methods are [Tarantola et al. (2006)](https://doi.org/10.1016/j.ress.2005.06.003)
+//! and [Plischke's EASI (2010)](https://doi.org/10.1016/j.ress.2009.11.005).
+//! This implementation sorts rows by each input and traverses odd ranks
+//! ascending, then even ranks descending, as EASI Section 3 specifies.
+//! It divides power in frequencies `1..=M` by total spectral power.
+//! It applies Plischke's Eq. (7): `(S_raw - 2M/N)/(1 - 2M/N)`.
 //!
-//!
-//! # Algorithm
-//!
-//! For each factor `i ∈ 0..d`:
-//!
-//! 1. Compute `permutation = argsort(X[:, i])`. Sorting `X[:, i]`
-//!    monotonically creates a "fundamental frequency 1" pattern in
-//!    the reordered output for any function of `xᵢ` alone.
-//! 2. Reorder `Y` by `permutation` → `Y_perm`.
-//! 3. Compute the one-sided power spectrum
-//!    `Sp[k] = |FFT(Y_perm)[k]|² / N²` for `k ∈ 1..=⌊N/2⌋`.
-//! 4. Total variance: `V = 2 · Σ_{k=1..=⌊N/2⌋} Sp[k]`.
-//! 5. First-order numerator: `V₁ = 2 · Σ_{k=1..=M} Sp[k]`.
-//! 6. **Naive estimate**: `S_naive = V₁ / V`.
-//! 7. **Plischke 2010 bias correction**:
-//!    `λ = 2·M / N`,  `Sᵢ = (S_naive − λ) / (1 − λ)`.
-//!
-//! Without the bias correction, RBD-FAST overestimates `Sᵢ` for
-//! small effects (Plischke 2010 Eq 5-6). The corrected form can
-//! produce slightly negative `Sᵢ` for true-zero factors — that's
-//! a feature of unbiased estimation, not a bug.
-//!
-//! # Differences from FAST/eFAST
-//!
-//! - **Given-data, not designed.** Works on any `(X, Y)` — LHS,
-//!   Sobol', user-provided. No special search-curve sampler.
-//! - **First-order only.** Sky spec § 5.4: total-order under RBD
-//!   is non-trivial and not in `SALib`; deferred.
-//! - **Different harmonic budget.** `SALib` defaults `M = 10` here
-//!   (vs `M = 4` for FAST). The permutation creates a different
-//!   spectral landscape than the search curve.
-//!
-//! # Bit-reproducibility
-//!
-//! Pure under `(X, Y, harmonic)`. Stable sort on `X[:, i]` gives a
-//! reproducible permutation; tie-breaking falls back to input
-//! order. `rustfft` is bit-reproducible for fixed input. Same
-//! `(X, Y)` in → bit-identical `RbdFastIndices` out.
+//! Conjugate frequency pairs are counted twice; even-length Nyquist is counted
+//! once. Tied input values are rejected: the rank trace would otherwise impose
+//! an arbitrary order on their outputs. Results can be negative after correction.
+//! `harmonic` must be supplied explicitly; its value controls truncation.
+//! No total-effect indices are returned. Inputs must be independent for
+//! the usual Sobol' interpretation; finite, aligned observations are required.
 
 #![allow(
     clippy::similar_names,
@@ -48,29 +20,24 @@
     clippy::many_single_char_names
 )]
 
-use std::cmp::Ordering;
 use std::fmt;
 use std::sync::Arc;
 
+use crate::fast::power_spectrum_one_sided;
 #[cfg(test)]
 use ndarray::Array2;
 use ndarray::ArrayView2;
-use rustfft::{num_complex::Complex, Fft, FftPlanner};
+use rustfft::{Fft, FftPlanner};
 use salib_core::tree_sum;
 
 /// First-order Sobol' index estimates per factor with Plischke 2010
 /// bias correction.
-///
-/// `#[non_exhaustive]` — future fields (`bootstrap_ci`, total-order
-/// extension if a literature-vetted RBD total-order lands) land
-/// non-breaking.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct RbdFastIndices {
-    /// First-order Sobol' indices, length `d`. Plischke-corrected;
-    /// can be slightly negative for true-zero factors due to MC
-    /// noise around the unbiased estimate.
+    /// Approximate first-order indices, length `d`. Can be negative.
+    /// See the module documentation for spectral truncation assumptions.
     pub s: Vec<f64>,
 }
 
@@ -127,8 +94,28 @@ pub enum RbdFastError {
         /// Minimum sample count required by this configuration.
         minimum: usize,
     },
-    /// Total variance below the FFT noise floor — model is constant.
-    #[error("RBD-FAST: total variance is zero (model output is constant)")]
+    /// A factor contains equal values and therefore has no unique rank trace.
+    #[error("RBD-FAST: tied input values in factor {factor}; rank traces require distinct values")]
+    TiedInput {
+        /// Zero-based input column containing a tie.
+        factor: usize,
+    },
+    /// An input value is nonfinite.
+    #[error("RBD-FAST: nonfinite input at row {row}, factor {factor}")]
+    NonFiniteInput {
+        /// Input row.
+        row: usize,
+        /// Input column.
+        factor: usize,
+    },
+    /// An output value is nonfinite.
+    #[error("RBD-FAST: nonfinite output at row {row}")]
+    NonFiniteOutput {
+        /// Output row.
+        row: usize,
+    },
+    /// Spectral variance is below `1e-15` or nonfinite from numerical overflow.
+    #[error("RBD-FAST: spectral variance is too small or nonfinite")]
     ZeroVariance,
 }
 
@@ -137,13 +124,12 @@ pub enum RbdFastError {
 ///
 /// `x` is the `(N, d)` input matrix (each row a sample, each column
 /// a factor). `y` is the corresponding model output vector of
-/// length `N`. `harmonic` is the spectral truncation order `M`
-/// (`SALib` default `10`).
+/// length `N`. `harmonic` is the spectral truncation order `M`.
 ///
-/// `X` may be from any sampler — LHS, Sobol', user data — provided
-/// the marginal distribution of each column is known. RBD-FAST is
-/// invariant to monotonic transformations of `X[:, i]` (the sort
-/// step removes them), so non-uniform marginals are fine.
+/// Observations must represent the distribution of interest. Strictly
+/// increasing input transformations preserve the ordering. Ties are rejected
+/// because no unique rank trace exists; use a conditioning estimator for
+/// discrete inputs instead.
 ///
 /// # Errors
 ///
@@ -151,15 +137,11 @@ pub enum RbdFastError {
 /// - [`RbdFastError::ZeroD`] if `x.ncols() == 0`.
 /// - [`RbdFastError::ZeroHarmonic`] if `harmonic == 0`.
 /// - [`RbdFastError::InsufficientSamples`] if `N < 2·harmonic + 1`.
-/// - [`RbdFastError::ZeroVariance`] if the model is constant.
-///
-/// # `NaN` handling
-///
-/// `X` containing `NaN` values triggers undefined-but-deterministic
-/// sort order (stable sort with `partial_cmp` falling back to
-/// `Equal` for `NaN` comparisons). The estimate will be valid only
-/// if all column values are well-ordered. The caller is responsible
-/// for `NaN`-free input.
+/// - [`RbdFastError::TiedInput`] if an input column contains equal values.
+/// - [`RbdFastError::NonFiniteInput`] or [`RbdFastError::NonFiniteOutput`]
+///   if an observation is not finite.
+/// - [`RbdFastError::ZeroVariance`] if spectral variance is below `1e-15`
+///   or nonfinite from numerical overflow.
 pub fn estimate_rbd_fast(
     x: ArrayView2<'_, f64>,
     y: &[f64],
@@ -188,6 +170,16 @@ pub fn estimate_rbd_fast(
         });
     }
 
+    for ((row, factor), value) in x.indexed_iter() {
+        if !value.is_finite() {
+            return Err(RbdFastError::NonFiniteInput { row, factor });
+        }
+    }
+    for (row, value) in y.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(RbdFastError::NonFiniteOutput { row });
+        }
+    }
     let fft = build_fft_planner(n);
 
     let m_usize = harmonic as usize;
@@ -205,27 +197,34 @@ pub fn estimate_rbd_fast(
             .iter_mut()
             .enumerate()
             .for_each(|(k, slot)| *slot = k);
-        permutation.sort_by(|&a, &b| x[[a, i]].partial_cmp(&x[[b, i]]).unwrap_or(Ordering::Equal));
+        permutation.sort_by(|&a, &b| x[[a, i]].total_cmp(&x[[b, i]]));
+        if permutation
+            .windows(2)
+            .any(|pair| x[[pair[0], i]] == x[[pair[1], i]])
+        {
+            return Err(RbdFastError::TiedInput { factor: i });
+        }
 
-        // Apply permutation to Y.
-        for (k, &p) in permutation.iter().enumerate() {
-            y_perm[k] = y[p];
+        // EASI: one-based odd sorted ranks ascend, then even ranks descend.
+        // This triangular traversal joins both endpoints of the periodic trace.
+        for (k, rank) in (0..n).step_by(2).chain((1..n).step_by(2).rev()).enumerate() {
+            y_perm[k] = y[permutation[rank]];
         }
 
         // One-sided power spectrum.
         let spectrum = power_spectrum_one_sided(&y_perm, fft.as_ref());
 
-        // Total variance: V = 2 · Σ Sp[k].
-        let v_total = 2.0 * tree_sum(&spectrum);
+        // Each spectrum bin already includes its conjugate multiplicity.
+        let v_total = tree_sum(&spectrum);
         if !v_total.is_finite() || v_total < 1e-15 {
             return Err(RbdFastError::ZeroVariance);
         }
 
-        // First-order: V₁ = 2 · Σ_{k=1..=M} Sp[k]. Sp is 0-indexed
+        // First-order: sum weighted bins through M. Sp is 0-indexed
         // with Sp[0] corresponding to frequency 1, so the first M
         // bins are Sp[0..M].
         let take = m_usize.min(spectrum.len());
-        let v1 = 2.0 * tree_sum(&spectrum[..take]);
+        let v1 = tree_sum(&spectrum[..take]);
 
         let s_naive = v1 / v_total;
         // Plischke 2010: S = (S_naive − λ) / (1 − λ).
@@ -240,24 +239,90 @@ fn build_fft_planner(n: usize) -> Arc<dyn Fft<f64>> {
     planner.plan_fft_forward(n)
 }
 
-fn power_spectrum_one_sided(y: &[f64], fft: &dyn Fft<f64>) -> Vec<f64> {
-    let n = y.len();
-    let mut buffer: Vec<Complex<f64>> = y.iter().map(|&v| Complex::new(v, 0.0)).collect();
-    fft.process(&mut buffer);
-    let half = n / 2;
-    let n_sq = (n as f64).powi(2);
-    (1..=half)
-        .map(|k| {
-            let c = buffer[k];
-            (c.re * c.re + c.im * c.im) / n_sq
-        })
-        .collect()
-}
-
 #[cfg(test)]
 #[allow(clippy::float_cmp, clippy::approx_constant)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn single_factor_cosine_recovers_unit_index_for_odd_and_even_lengths() {
+        for n in [4096, 4097] {
+            let x = Array2::from_shape_fn((n, 1), |(j, _)| (j as f64 + 0.5) / n as f64);
+            let y: Vec<_> = (0..n)
+                .map(|j| (std::f64::consts::PI * x[[j, 0]]).cos())
+                .collect();
+            let actual = estimate_rbd_fast(x.view(), &y, 4).unwrap().s[0];
+            assert!((actual - 1.0).abs() < 1e-5, "N={n}: S={actual}");
+        }
+    }
+
+    #[test]
+    fn rbd_spectrum_matches_inverse_triangular_parseval_fixture() {
+        for n in [63, 64] {
+            let x = Array2::from_shape_fn((n, 1), |(j, _)| j as f64 / n as f64);
+            let trace: Vec<_> = (0..n)
+                .map(|j| {
+                    (2.0 * std::f64::consts::PI * j as f64 / n as f64).cos()
+                        + if n % 2 == 0 {
+                            if j % 2 == 0 {
+                                1.0
+                            } else {
+                                -1.0
+                            }
+                        } else {
+                            0.0
+                        }
+                })
+                .collect();
+            let mut y = vec![0.0; n];
+            for (j, rank) in (0..n).step_by(2).chain((1..n).step_by(2).rev()).enumerate() {
+                y[rank] = trace[j];
+            }
+            let raw_share = if n % 2 == 0 { 1.0 / 3.0 } else { 1.0 };
+            let lambda = 2.0 / n as f64;
+            let expected = (raw_share - lambda) / (1.0 - lambda);
+            let actual = estimate_rbd_fast(x.view(), &y, 1).unwrap().s[0];
+            assert!(
+                (actual - expected).abs() < 1e-12,
+                "N={n}: {actual} vs {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn ties_are_rejected_independently_of_row_order() {
+        let x = Array2::from_shape_fn((16, 1), |(j, _)| (j / 2) as f64);
+        let y: Vec<_> = (0..16).map(|j| j as f64).collect();
+        assert_eq!(
+            estimate_rbd_fast(x.view(), &y, 4).unwrap_err(),
+            RbdFastError::TiedInput { factor: 0 }
+        );
+        let reverse = Array2::from_shape_fn((16, 1), |(j, _)| x[[15 - j, 0]]);
+        let reverse_y: Vec<_> = y.iter().copied().rev().collect();
+        assert_eq!(
+            estimate_rbd_fast(reverse.view(), &reverse_y, 4).unwrap_err(),
+            RbdFastError::TiedInput { factor: 0 }
+        );
+    }
+
+    #[test]
+    fn nonfinite_observations_are_rejected() {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut x = lhs_x(16, 1);
+            let mut y: Vec<_> = (0..16).map(|j| j as f64).collect();
+            x[[3, 0]] = value;
+            assert_eq!(
+                estimate_rbd_fast(x.view(), &y, 4).unwrap_err(),
+                RbdFastError::NonFiniteInput { row: 3, factor: 0 }
+            );
+            x = lhs_x(16, 1);
+            y[5] = value;
+            assert_eq!(
+                estimate_rbd_fast(x.view(), &y, 4).unwrap_err(),
+                RbdFastError::NonFiniteOutput { row: 5 }
+            );
+        }
+    }
 
     fn lhs_x(n: usize, d: usize) -> Array2<f64> {
         // Deterministic per-column independent permutation of the

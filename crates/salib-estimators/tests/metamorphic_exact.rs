@@ -284,17 +284,12 @@ mod metamorphic_exact {
         for (scale, shift) in [(1.0, 10.0), (2.0, 3.0), (-2.0, 3.0)] {
             let aa: Vec<_> = a.iter().map(|v| scale * v + shift).collect();
             let bb: Vec<_> = b.iter().map(|v| scale * v + shift).collect();
-            let base =
-                estimate_saltelli2010_from_outputs(&a, &b, std::slice::from_ref(&b));
+            let base = estimate_saltelli2010_from_outputs(&a, &b, std::slice::from_ref(&b));
             close(base.first_order[0], 4.2);
             let expected = base.first_order[0] + shift / (scale * base.total_variance) * 1.5;
             for got in [
                 estimate_saltelli2010(&m, |x| scale * x[0] + shift),
-                estimate_saltelli2010_from_outputs(
-                    &aa,
-                    &bb,
-                    std::slice::from_ref(&bb),
-                ),
+                estimate_saltelli2010_from_outputs(&aa, &bb, std::slice::from_ref(&bb)),
                 estimate_saltelli2010_from_outputs_with_second_order(
                     &aa,
                     &bb,
@@ -327,31 +322,28 @@ mod metamorphic_exact {
         }
     }
 
-    /// Relation 5: fixed tail counts 32/31; shifts must use the pre-clamp formula.
+    /// Relation 5: empirical pinball loss is translation invariant and homogeneous.
     #[test]
-    fn qosa_scaling_and_shift_follow_tail_counts() {
+    fn qosa_pinball_loss_preserves_positive_affine_output_changes() {
         let y: Vec<_> = (1..=64).map(f64::from).collect();
         let x = Array2::from_shape_vec((64, 1), y.clone()).unwrap();
         let base = estimate_qosa(x.view(), &y, 0.5).unwrap();
-        close(base.s[0], 0.708984375);
-        let mean = 32.5;
-        let rg = 32.0 / 32.0;
-        let ri = 31.0 / 32.0;
-        let ti = base.global_cte - base.s[0] * (base.global_cte - mean);
-        for (a, b) in [(2.0, 0.0), (1.0, 10.0), (2.0, 10.0)] {
+        // For Y=1..64, q=32 and the sum of median pinball losses is
+        // (1+...+31 + 1+...+32)/2 = 512, hence mean loss 8.
+        // The three untied classes have 21,21,22 observations. Their
+        // median losses are 55,55,60.5, summing to 170.5. Therefore
+        // the empirical partition index is 1 - 170.5/512 = 683/1024.
+        close(base.global_quantile, 32.0);
+        close(base.global_loss, 8.0);
+        close(base.global_cte, 48.5); // Mean of the upper 32 observations.
+        close(base.s[0], 683.0 / 1024.0);
+        for (a, b) in [(2.0, 0.0), (1.0, 10.0), (2.0, 10.0), (0.25, -16.0)] {
             let yy: Vec<_> = y.iter().map(|y| a * y + b).collect();
             let got = estimate_qosa(x.view(), &yy, 0.5).unwrap();
             close(got.global_quantile, a * base.global_quantile + b);
-            close(got.global_cte, a * base.global_cte + b * rg);
-            close(
-                got.s[0],
-                ((a * (base.global_cte - ti) + b * (rg - ri))
-                    / (a * (base.global_cte - mean) + b * (rg - 1.0)))
-                    .clamp(0.0, 1.0),
-            );
-            if a == 1.0 {
-                close(got.s[0], 0.728515625);
-            }
+            close(got.global_loss, a * base.global_loss);
+            close(got.global_cte, a * base.global_cte + b);
+            close(got.s[0], base.s[0]);
         }
     }
 

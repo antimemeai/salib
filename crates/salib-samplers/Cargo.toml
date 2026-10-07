@@ -36,8 +36,10 @@ serde_json = "1"
 thiserror = "2"
 
 [dev-dependencies]
+# Cross-crate test fixtures are workspace-only. Path-only dev dependencies are
+# omitted from published manifests, avoiding cycles between unpublished releases.
 # Kani 0.68.0 injects its proof API; the `kani` crate is not published.
-salib-estimators = { version = "0.3.0", path = "../salib-estimators" }
+salib-estimators = { path = "../salib-estimators" }
 
 [features]
 serde = ["ndarray/serde"]

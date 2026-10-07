@@ -1,44 +1,20 @@
-//! Jansen 1999 squared-difference first-order Sobol' estimator.
+//! Jansen's squared-difference first-order Sobol' estimator.
 //!
-//! Per Jansen 1999 ("Analysis of variance designs for model output").
-//! The "complementary" first-order form to PR 7's total-order form
-//! (Saltelli 2010 Eq f). Both use the squared-difference structure;
-//! they differ only in which pair of evaluations is paired.
-//!
-//! # Formula
+//! [Saltelli et al. (2010)](https://doi.org/10.1016/j.cpc.2009.09.018),
+//! Eq. (18) and Table 2(c), present this form and attribute it to
+//! [Jansen (1999)](https://doi.org/10.1016/S0010-4655(98)00154-4).
+//! The paired outputs `Y = f(B)` and `Y^X = f(A_Bⁱ)` share input `i`:
 //!
 //! ```text
-//! Y       = f(B)                         pick-freeze "Y" series
-//! Y^X     = f(A_Bⁱ)                       pair sharing column i
-//!
-//! S_i^Jansen = 1 − (1/(2N)) Σ (Y_j − Y^X_j)² / Var(Y)
+//! S_i = 1 - mean((Y - Y^X)^2)/(2D),
+//! D   = mean((Y - mean(Y))^2).
 //! ```
 //!
-//! Derivation: under the pick-freeze design, `Var(Y − Y^X) = 2 ·
-//! Var(Y) · (1 − S_i)`, and `Var(Y − Y^X) = E[(Y − Y^X)²]` when
-//! `E[Y] = E[Y^X]` (which holds in expectation for our design).
-//! Rearranging gives the formula.
-//!
-//! # Why this alongside Saltelli2010 + Janon
-//!
-//! Three first-order estimators ship now from the same `(A, B, A_Bⁱ)`
-//! matrix; they differ in finite-sample bias / variance tradeoffs:
-//!
-//! | Estimator | Form | Best for |
-//! |---|---|---|
-//! | Saltelli 2010 (Eq c) | Covariance with biased denominator | General default; widely cited |
-//! | Janon 2014 (`T_N^X`) | Covariance with efficient joint denominator | Asymptotically optimal CI |
-//! | Jansen 1999 (this module) | Squared-difference, complementary form | Numerical stability when `S_i` is close to 1 |
-//!
-//! Jansen's form has the property that `1 − S_i` is computed as
-//! a sum of squares, which is non-negative by construction. For
-//! near-saturation factors (`S_i → 1`), the squared-difference path
-//! avoids the cancellation noise that Saltelli's Eq c can exhibit.
-//!
-//! # Bit-reproducibility
-//!
-//! Pure under `(matrix, model)`. All sums route through `tree_sum`.
-//! Same matrix + model in → bit-identical output.
+//! Independent inputs give `E[(Y-Y^X)^2] = 2 Var(Y)(1-S_i)`.
+//! The estimate is at most one when `D > 0`, but can be negative.
+//! `JansenIndices` contains first-order and optional pairwise estimates.
+//! For Jansen's total-effect formula, use [`crate::estimate_saltelli2010`],
+//! which compares `f(A)` with `f(A_Bⁱ)`.
 
 #![allow(
     clippy::similar_names,
@@ -53,8 +29,6 @@ use salib_core::tree_sum;
 use salib_samplers::SaltelliMatrix;
 
 /// First-order Sobol' indices via Jansen 1999 squared-difference form.
-///
-/// `#[non_exhaustive]` — future fields land non-breaking.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
@@ -63,7 +37,7 @@ pub struct JansenIndices {
     /// squared-difference identity `S_i = 1 − (1/(2N)) Σ (Y − Y^X)² /
     /// Var(Y)` (Jansen 1999).
     pub first_order: Vec<f64>,
-    /// Total variance estimated from the joint `(Y, Y^X)` samples.
+    /// Output variance estimated from `f(B)` with divisor `N`.
     pub total_variance: f64,
     /// Second-order indices `S2_{i,j}` for all `i < j`, laid out as
     /// `second_order[i][k] = S2_{i, i+k+1}` (upper triangle, row-major).
@@ -136,7 +110,7 @@ where
         first_order.push(s_i);
     }
 
-    // ── Second-order indices (Saltelli 2010 Eq d) ────────────────
+    // Pairwise indices from complementary hybrids.
     //
     // When B_Aⁱ matrices are available, compute S2_{ij} for i < j:
     //   V_{ij}  = (1/N) Σ_k [ fba[j][k] · fab[i][k] - fa[k] · fb[k] ]

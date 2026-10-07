@@ -1,47 +1,26 @@
-//! FAST/eFAST spectral estimator — `Sᵢ` (first-order) and `Sᵀᵢ`
-//! (total-order) Sobol' indices via spectral decomposition of the
-//! search-curve sample-output series.
+//! First-order and total-effect estimates from FAST search curves.
 //!
-//! Companion
-//! to PR 9a's [`salib_samplers::FastDesign`] sampler.
+//! [Saltelli, Tarantola and Chan (1999)](https://doi.org/10.1080/00401706.1999.10485594),
+//! Sections 3–4, estimate total effects from the variance of the complementary
+//! inputs. This implementation analyzes each factor's block separately:
 //!
-//! # Algorithm (Saltelli-Tarantola-Chan 1999)
+//! ```text
+//! w[k] = 1 at even-N Nyquist, 2 otherwise
+//! P[k] = w[k] * |DFT(y)[k]|^2 / N^2
+//! V    = sum_{k=1..floor(N/2)} P[k]
+//! V1   = sum_{p=1..M} P[p * omega_i]
+//! Vc   = sum_{k=1..floor(omega_i/2)} P[k]
+//! S_i  = V1/V;  ST_i = 1-Vc/V.
+//! ```
 //!
-//! For each factor-of-interest `i ∈ 0..d`:
+//! The weighted one-sided spectrum gives the population-divisor sample
+//! variance for both odd and even `N`.
+//! Harmonic truncation and frequency interference affect accuracy; increasing
+//! the number of samples alone does not control every source of error.
+//! Both reported indices are clamped to `[0,1]`.
 //!
-//! 1. Evaluate the model at the `n_per_factor` points of block `i`
-//!    in `design.samples` → `y_i ∈ ℝ^N`.
-//! 2. Compute the one-sided power spectrum
-//!    `Sp[k] = |Y[k]|² / N²` for `k ∈ 1..=⌊N/2⌋`, where `Y[k]` is
-//!    the discrete Fourier transform of `y_i` at frequency `k`.
-//!    The DC bin (`k = 0`) is omitted; `V` below is variance-about-
-//!    mean by construction.
-//! 3. Total variance: `V = 2 · Σ_{k=1..=⌊N/2⌋} Sp[k]`.
-//! 4. First-order variance:
-//!    `V₁ᵢ = 2 · Σ_{p=1..M} Sp[p · ωᵢ]`.
-//! 5. Total-effect "complementary" variance (variance carried by
-//!    frequencies in the complementary band `[1, ⌊ωᵢ/2⌋]`):
-//!    `V_~ᵢ = 2 · Σ_{k=1..⌊ωᵢ/2⌋} Sp[k]`.
-//! 6. Indices: `Sᵢ = V₁ᵢ / V`, `Sᵀᵢ = 1 − V_~ᵢ / V`.
-//!
-//! Matches `SALib`'s `analyze.fast` exactly modulo MC noise (the
-//! sampler's random phase shifts produce different realizations
-//! that converge to the same population indices).
-//!
-//! # Bit-reproducibility
-//!
-//! Pure under `(design, model)`. The `rustfft` planner is
-//! bit-reproducible for a fixed input length; spectrum extraction
-//! and accumulation use `salib-core` tree-fold reductions. Same
-//! `(design, model)` in → bit-identical `FastIndices` out
-//! regardless of rayon thread count.
-//!
-//! # Cost
-//!
-//! `n_per_factor · d` model evaluations + `d` FFTs of length
-//! `n_per_factor`. The model dominates by orders of magnitude for
-//! any non-trivial model (the FFTs are microseconds at typical
-//! `N ≤ 1024`).
+//! Costs `N*d` model evaluations and `d` Fourier transforms of length `N`.
+//! Model inputs are passed through exactly as stored in `FastDesign`.
 
 #![allow(
     clippy::similar_names,
@@ -58,10 +37,6 @@ use salib_core::tree_sum;
 use salib_samplers::{FastDesign, HarmonicBudget};
 
 /// First-order and total-order Sobol' index estimates per factor.
-///
-/// `#[non_exhaustive]` — future fields (`bootstrap_ci`, `harmonic`
-/// echo for audit, `total_variance` for downstream GUM contribution)
-/// land non-breaking.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
@@ -113,9 +88,15 @@ pub enum FastEstimatorError {
         /// Maximum harmonic supplied by the caller.
         harmonic: u32,
     },
+    /// A model evaluation produced a nonfinite value.
+    #[error("FAST estimator: nonfinite model output at sample row {row}")]
+    NonFiniteOutput {
+        /// Row of the design that produced the invalid output.
+        row: usize,
+    },
     /// Total variance is zero (or numerical floor) — model is
     /// constant, no sensitivity to recover.
-    #[error("FAST estimator: total variance is zero (model output is constant)")]
+    #[error("FAST estimator: spectral variance is too small or nonfinite")]
     ZeroVariance,
 }
 
@@ -128,14 +109,13 @@ pub enum FastEstimatorError {
 /// # Errors
 ///
 /// - [`FastEstimatorError::InvalidHarmonic`] if harmonic is outside `1..=32`.
-/// - [`FastEstimatorError::ZeroVariance`] if the model is constant
-///   over the design samples (total variance below `1e-15`, well
-///   above the FFT noise floor for `O(1)`-scale outputs).
+/// - [`FastEstimatorError::NonFiniteOutput`] if a model output is not finite.
+/// - [`FastEstimatorError::ZeroVariance`] if spectral variance is below
+///   `1e-15` or nonfinite from numerical overflow.
 ///
-/// `FastDesign` is `#[non_exhaustive]` and constructible only via
-/// [`salib_samplers::build_fast_design`], which enforces
-/// `n_per_factor ≥ 4·M² + 1`. The bandwidth precondition therefore
-/// holds at this seam without a runtime check.
+/// [`salib_samplers::build_fast_design`] constructs a consistent design.
+/// Its public fields can be changed; callers must preserve sample shapes
+/// and frequency metadata. Only the harmonic order is revalidated here.
 pub fn estimate_fast<F>(
     design: &FastDesign,
     mut model: F,
@@ -169,26 +149,24 @@ where
             for j in 0..d {
                 row_buf[j] = design.samples[[row, j]];
             }
-            y.push(model(&row_buf));
+            let value = model(&row_buf);
+            if !value.is_finite() {
+                return Err(FastEstimatorError::NonFiniteOutput { row });
+            }
+            y.push(value);
         }
 
-        // One-sided power spectrum: Sp[k] = |Y[k]|² / N² for k ∈ [1, n/2].
+        // Weighted one-sided spectral variance for frequencies 1..=N/2.
         let spectrum = power_spectrum_one_sided(&y, fft.as_ref());
 
-        // Total variance: V = 2 · Σ Sp[k] for k = 1..len(Sp).
-        // For a constant signal, the FFT of `[c, c, ..., c]` is
-        // `[N·c, 0, 0, ..., 0]` in exact arithmetic; FP rounding
-        // leaves residual `~|c|² · N · ε²` per bin (`ε ≈ 1e−16`),
-        // accumulating to `~1e−28` at typical `N`. Threshold `1e−15`
-        // sits well above that noise floor and well below any
-        // legitimate variance signal. Rejects truly-constant-model
-        // calls; pass-through otherwise.
-        let v_total = 2.0 * tree_sum(&spectrum);
+        // The helper has already counted each conjugate pair, and Nyquist once.
+        // The absolute 1e-15 threshold can reject small but nonzero variance.
+        let v_total = tree_sum(&spectrum);
         if !v_total.is_finite() || v_total < 1e-15 {
             return Err(FastEstimatorError::ZeroVariance);
         }
 
-        // First-order: V₁ᵢ = 2 · Σ_{p=1..=M} Sp[p · ωᵢ - 1].
+        // First-order: sum weighted power at the characteristic harmonics.
         // (Sp is indexed from 0 corresponding to frequency 1, hence
         // the −1 shift from the math notation.) The bandwidth
         // precondition `n_per_factor ≥ 4·M² + 1` upstream guarantees
@@ -202,17 +180,12 @@ where
             debug_assert!(bin >= 1 && bin - 1 < spectrum.len());
             harmonic_bins[p - 1] = spectrum[bin - 1];
         }
-        let v1 = 2.0 * tree_sum(&harmonic_bins[..m_usize]);
+        let v1 = tree_sum(&harmonic_bins[..m_usize]);
 
-        // Total-effect: V_~ᵢ = 2 · Σ_{k=1..=⌊ωᵢ/2⌋} Sp[k].
-        // The complementary band sits at `[1, ⌊ωᵢ/2⌋]`; per Saltelli
-        // 1999 this is the bandwidth that excludes ωᵢ's harmonics
-        // and hence captures only "non-i" variance. The `.max(1)`
-        // is defensive — `omegas[[i, i]] = ω_max ≥ 4·M ≥ 4` is
-        // guaranteed by `build_fast_design`'s precondition, so
-        // `half ≥ 2` always holds.
+        // Approximate complementary variance from the low-frequency band.
+        // Interactions can still cause spectral interference.
         let half = (omega_i / 2).max(1).min(spectrum.len());
-        let v_comp = 2.0 * tree_sum(&spectrum[..half]);
+        let v_comp = tree_sum(&spectrum[..half]);
 
         s[i] = (v1 / v_total).clamp(0.0, 1.0);
         st[i] = (1.0 - v_comp / v_total).clamp(0.0, 1.0);
@@ -228,10 +201,10 @@ fn build_fft_planner(n: usize) -> Arc<dyn Fft<f64>> {
     planner.plan_fft_forward(n)
 }
 
-/// Compute the one-sided power spectrum `Sp[k] = |Y[k]|² / N²`
-/// for `k ∈ [1, ⌊N/2⌋]`. Output length is `⌊N/2⌋`. Index `k − 1`
-/// of the output corresponds to frequency `k` (1-indexed).
-fn power_spectrum_one_sided(y: &[f64], fft: &dyn Fft<f64>) -> Vec<f64> {
+/// Spectral variance at each positive frequency: `w[k] * |Y[k]|² / N²`.
+/// Conjugate pairs have weight two, the even-length Nyquist bin weight one.
+/// DC is omitted; index `k-1` corresponds to frequency `k`.
+pub(super) fn power_spectrum_one_sided(y: &[f64], fft: &dyn Fft<f64>) -> Vec<f64> {
     let n = y.len();
     let mut buffer: Vec<Complex<f64>> = y.iter().map(|&v| Complex::new(v, 0.0)).collect();
     fft.process(&mut buffer);
@@ -240,7 +213,12 @@ fn power_spectrum_one_sided(y: &[f64], fft: &dyn Fft<f64>) -> Vec<f64> {
     (1..=half)
         .map(|k| {
             let c = buffer[k];
-            (c.re * c.re + c.im * c.im) / n_sq
+            let weight = if n.is_multiple_of(2) && k == half {
+                1.0
+            } else {
+                2.0
+            };
+            weight * (c.re * c.re + c.im * c.im) / n_sq
         })
         .collect()
 }
@@ -255,6 +233,86 @@ mod tests {
     use super::*;
     use salib_core::RngState;
     use salib_samplers::build_fast_design;
+
+    #[test]
+    fn spectral_variance_matches_direct_variance_for_odd_and_even_lengths() {
+        for n in [63, 64] {
+            let y: Vec<_> = (0..n)
+                .map(|j| {
+                    7.0 + (2.0 * std::f64::consts::PI * j as f64 / n as f64).cos()
+                        + if n % 2 == 0 {
+                            if j % 2 == 0 {
+                                1.0
+                            } else {
+                                -1.0
+                            }
+                        } else {
+                            0.0
+                        }
+                })
+                .collect();
+            let mean = y.iter().sum::<f64>() / n as f64;
+            let direct = y.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n as f64;
+            let fft = build_fft_planner(n);
+            let spectral = tree_sum(&power_spectrum_one_sided(&y, fft.as_ref()));
+            assert!(
+                (spectral - direct).abs() < 1e-12,
+                "N={n}: spectral={spectral}, direct={direct}"
+            );
+        }
+        let y: Vec<_> = (0..64)
+            .map(|j| if j % 2 == 0 { 1.0 } else { -1.0 })
+            .collect();
+        let fft = build_fft_planner(y.len());
+        assert!((tree_sum(&power_spectrum_one_sided(&y, fft.as_ref())) - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn fast_uses_correct_weights_in_total_and_complementary_bands() {
+        for n in [73, 74] {
+            let design = build(1, n);
+            let omega = f64::from(design.omegas[[0, 0]]);
+            let coordinates: Vec<_> = (0..n).map(|j| design.samples[[j, 0]]).collect();
+            assert!(coordinates.iter().enumerate().all(|(j, x)| coordinates[..j]
+                .iter()
+                .all(|prior| prior.to_bits() != x.to_bits())));
+            let estimate = estimate_fast(&design, |u| {
+                let j = coordinates
+                    .iter()
+                    .position(|x| x.to_bits() == u[0].to_bits())
+                    .unwrap();
+                let phase = 2.0 * std::f64::consts::PI * j as f64 / n as f64;
+                (omega * phase).cos()
+                    + 0.5 * phase.cos()
+                    + if n % 2 == 0 {
+                        if j % 2 == 0 {
+                            1.0
+                        } else {
+                            -1.0
+                        }
+                    } else {
+                        0.0
+                    }
+            })
+            .unwrap();
+            // Orthogonal discrete Fourier modes: ordinary modes each have
+            // variance amplitude²/2; the even-N Nyquist mode has variance 1.
+            let total = 0.5 + 0.125 + if n % 2 == 0 { 1.0 } else { 0.0 };
+            assert!((estimate.s[0] - 0.5 / total).abs() < 1e-12);
+            assert!((estimate.st[0] - (1.0 - 0.125 / total)).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn fast_rejects_nonfinite_model_output() {
+        let design = build(1, 65);
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(
+                estimate_fast(&design, |_| value).unwrap_err(),
+                FastEstimatorError::NonFiniteOutput { row: 0 }
+            );
+        }
+    }
 
     #[test]
     fn fast_rejects_excessive_harmonic() {
