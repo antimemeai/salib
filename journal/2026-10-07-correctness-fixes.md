@@ -103,3 +103,23 @@ release draft explaining the publication blocker. Keep the draft unpublished
 until all registry uploads succeed. Publication remains authorized when the
 credential is refreshed. Updated the release assessment to reflect actual
 shipment status; this follow-up changes only documentation, not released code.
+
+## Publication completed
+
+The operator identified the workspace ~/projects/.env credential. Its `crates`
+entry was safely parsed without sourcing the file or printing the secret and
+passed as CARGO_REGISTRY_TOKEN only to the publication subprocess. Switched to
+the clean v0.3.0 tagged commit e0876d65181580edea653edf7eb90180c5065572 before
+publishing. The checked publisher verified and uploaded all eight0.3.0 crates,
+waited for registry availability and exited0. The official crates.io API confirms
+each version exists and is not yanked. Registry SHA256 checksums match all eight
+uploaded local archives; their VCS metadata identifies the clean tagged source.
+The first provenance script used Cargo's single-package archive location; it was
+corrected to the workspace publisher's tmp-crate location and passed.
+
+Published the prepared GitHub release at
+https://github.com/antimemeai/salib/releases/tag/v0.3.0 after successful registry
+verification, removing the draft's obsolete blocker notice. Confirmed isDraft=false
+and publishedAt=2026-10-07T12:33:50Z. Returned the checkout to master and updated
+the assessment. The token was neither logged nor written into the repository or
+Cargo's saved credentials. The initially rejected saved credential was untouched.

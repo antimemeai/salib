@@ -1,19 +1,24 @@
 # Push and release assessment, 2026-10-07
 
-**Reviewed changes pushed and PR #1 merged. The source is tagged v0.3.0;
-crates.io publication is blocked by rejected credentials.**
-No unresolved blocker remains in the audited implementation or release checks.
+**Release complete: PR #1 merged, v0.3.0 tagged, all eight crates published,
+and the GitHub release published.**
 The operator authorized shipment with "send it". Commit `96124e8` was pushed and
 merged as `e0876d65181580edea653edf7eb90180c5065572`, which is the source tag's
-commit. All eight crates packaged and built again during actual publication.
-The first upload, salib-core, returned HTTP 403 "authentication failed"; no
-crate was published. The official registry version endpoints subsequently
-returned HTTP 404 for all eight 0.3.0 versions.
+commit. No unresolved blocker remains in the audited implementation or release
+checks.
 
-A GitHub release draft is prepared. It remains a draft until registry
-publication succeeds. The saved Cargo token needs refreshing locally with
-`cargo +1.95.0 login`; do not put registry credentials in chat. Then retry
-`scripts/publish.sh --publish` from the clean tagged source. The table below
+The initial attempt with Cargo's saved token failed before any upload. The
+operator then identified `~/projects/.env`; its `crates` entry was passed as
+`CARGO_REGISTRY_TOKEN` to the retry process only, without printing or persisting
+its value. Publication ran from the clean tagged source and succeeded for
+salib-core, salib-samplers, salib-surrogate, salib-estimators, salib-shapley,
+salib-validation, salib and salib-cli. The official registry API confirms every
+0.3.0 version exists and is not yanked. All eight registry SHA-256 checksums match
+the locally uploaded archives, whose VCS metadata identifies the clean tagged
+commit.
+
+The [GitHub release](https://github.com/antimemeai/salib/releases/tag/v0.3.0)
+is published, with compatibility notes and validation results. The table below
 records the pre-shipment validation and availability checks.
 
 ## Validation of the final working tree
@@ -82,9 +87,9 @@ warning about excluding it is not a missing production source file.
 `scripts/publish.sh` uses Cargo's multi-package publisher, verified with Cargo 1.95.
 It does not bump versions or require cargo-workspaces. Its default is a real
 dry run. `--publish` requires a clean Git tree and explicitly uploads the existing
-versions. The eventual registry token/owner authorization is exercised only by
-actual publication; the successful dry run proves packaging/build readiness,
-not an upload authorization claim.
+versions. The dry run proves packaging/build readiness. Registry authorization was
+subsequently exercised successfully during actual publication with the workspace
+credential identified by the operator.
 
 Reproduce the material checks with an installed toolchain:
 
@@ -105,6 +110,5 @@ CARGO_BUILD_JOBS=2 ./scripts/publish.sh --dry-run
 ```
 
 The explicit publication command is `./scripts/publish.sh --publish`.
-Push, merge and source tagging are complete; registry upload and publishing the
-prepared GitHub release draft remain outstanding because authentication failed.
-Publication remains authorized once the credential is refreshed.
+Push, merge, source tagging, registry uploads and the GitHub release are
+complete. All eight immutable 0.3.0 versions are available; do not republish them.
