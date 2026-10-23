@@ -31,3 +31,34 @@ runner and environment files are copied unchanged from the
 Dropped crolib-hmz target 2 (committing the EMS and eigenstructure
 derivations): it would only test the Sage library, which is a test of a test.
 The eigenstructure result belongs to crolib-3bk's finite-universe derivation.
+
+## Review
+
+A fresh reviewer confirmed the values independently: brute-force Sobol' G by
+exact quadrature matched bit for bit, as did Ishigami's textbook forms.
+Injected bugs miss by 706 ulp to 2e15 ulp. All findings are adopted:
+
+- **The log-sum D was worse at large D.** The `expm1(Σ ln1p V)` form loses
+  accuracy as D grows: 65 ulp at d = 50 and 6907 ulp at d = 500 with all
+  a = 0 (the Kucherenko type-C setup), against 12 and 121 for the direct
+  product. It was also not exact for one factor, so S could exceed 1. D is
+  now accumulated as `D ← D + V_k(1 + D)`, a sum of nonnegative terms that is
+  exact for d = 1. S_Ti uses the direct product.
+  - The oracle adds d = 1, d = 50 and d = 500 cases.
+  - The Sobol' G tolerance is now `8 + 3d` ulp, about three rounded
+    operations per factor at ε/2 each. A flat 8 ulp is wrong for a d-term
+    product (the recurrence is 11.9 ulp at d = 50).
+  - The d = 500 case fails the intermediate log-sum version; checked.
+- **The Sobol' G oracle shared the product form with the code.** Cases with
+  d ≤ 3 are now also derived by integrating the full product
+  (D = E g² − 1, S_Ti = (D − Var E[g | x_~i])/D), and the two routes agree
+  exactly. Larger cases rely on the product form, and the header says so.
+- **Exact inputs.** Ishigami's a and b, and every Sobol' G a, are the exact
+  f64 values Rust receives.
+- **Smaller fixes.**
+  - Module docs no longer say total-order indices are deferred.
+  - V_i divides twice, which postpones overflow to a ≈ 1e162; the remaining
+    limit is documented.
+  - The test checks the vector lengths.
+  - `sage-check.sh` requires crolib's library only when a script loads it.
+- `docs/tck-retirement-plan.md` is a historical plan and keeps its wording.

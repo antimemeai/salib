@@ -12,13 +12,18 @@ use salib_validation::{ishigami, sobol_g};
 
 /// A few-flop closed form should land within a handful of ulps of the exact value.
 fn close(name: &str, got: f64, exact: f64) {
+    close_within(name, got, exact, 8.0);
+}
+
+/// Within `bound` ulps of the exact value; an exact zero must be exactly zero.
+fn close_within(name: &str, got: f64, exact: f64, bound: f64) {
     if exact == 0.0 {
         assert!(got == 0.0, "{name}: got {got:e}, exact 0");
         return;
     }
     let ulps = (got - exact).abs() / (exact.abs() * f64::EPSILON);
     assert!(
-        ulps <= 8.0,
+        ulps <= bound,
         "{name}: got {got:e}, exact {exact:e} ({ulps:.1} ulp)"
     );
 }
@@ -53,17 +58,29 @@ fn sobol_g_matches_exact_decomposition() {
     for case in oracle::SOBOL_G_CASES {
         let s = sobol_g::analytic_indices(case.a);
         let tag = format!("a={:?}", case.a);
-        close(&format!("{tag} D"), s.total_variance, case.total_variance);
+        assert_eq!(s.first_order.len(), case.a.len(), "{tag}");
+        assert_eq!(s.total_order.len(), case.a.len(), "{tag}");
+        // D and each S_Ti come from about three rounded operations per factor,
+        // each with relative error at most ε/2: about 3d ulps, plus slack.
+        let bound = 8.0 + 3.0 * case.a.len() as f64;
+        close_within(
+            &format!("{tag} D"),
+            s.total_variance,
+            case.total_variance,
+            bound,
+        );
         for i in 0..case.a.len() {
-            close(
+            close_within(
                 &format!("{tag} S{i}"),
                 s.first_order[i],
                 case.first_order[i],
+                bound,
             );
-            close(
+            close_within(
                 &format!("{tag} ST{i}"),
                 s.total_order[i],
                 case.total_order[i],
+                bound,
             );
         }
     }
