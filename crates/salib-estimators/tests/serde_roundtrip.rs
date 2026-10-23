@@ -382,6 +382,8 @@ fn g_theory_design_mixed_roundtrip() {
 fn g_theory_result_roundtrip() {
     roundtrip_json::<GTheoryResult>(
         r#"{
+            "n_items": 4,
+            "n_raters": 2,
             "sigma_p": 1.5,
             "sigma_i": 0.3,
             "sigma_r": 0.2,
@@ -389,17 +391,20 @@ fn g_theory_result_roundtrip() {
             "sigma_pr": 0.05,
             "sigma_ir": 0.04,
             "sigma_pir": 0.02,
-            "g_coefficient": 0.88,
-            "phi_coefficient": 0.82,
-            "variance_component_ci_low": null,
-            "variance_component_ci_high": null,
+            "g_coefficient": {"Ok": 0.88},
+            "phi_coefficient": {"Err": {"NegativeComponent": {"component": "Ir"}}},
+            "negative_components_zeroed": false,
+            "variance_component_ci_low": [null, 0.1, 0.0, 0.0, 0.0, 0.0, 0.01],
+            "variance_component_ci_high": [null, 0.6, 0.5, 0.3, 0.2, 0.1, 0.05],
             "g_coefficient_ci_low": null,
             "g_coefficient_ci_high": null,
             "phi_coefficient_ci_low": null,
             "phi_coefficient_ci_high": null,
             "bootstrap_iterations": null,
             "bootstrap_alpha": null,
-            "bootstrap_skipped": null
+            "bootstrap_skipped": null,
+            "g_coefficient_failed": null,
+            "phi_coefficient_failed": null
         }"#,
     );
 }
@@ -410,8 +415,8 @@ fn d_study_point_roundtrip() {
         r#"{
             "n_items": 10,
             "n_raters": 5,
-            "g_coefficient": 0.91,
-            "phi_coefficient": 0.87
+            "g_coefficient": {"Ok": 0.91},
+            "phi_coefficient": {"Err": "ZeroDenominator"}
         }"#,
     );
 }

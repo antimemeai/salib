@@ -1,6 +1,6 @@
 {
-  "description": "Hand-verified synthetic 4p x 3i x 2r dataset for G-theory Gate 1 validation",
-  "source": "Analytically derived via three-way crossed ANOVA EMS decomposition. All variance components verified by hand calculation.",
+  "description": "Self-derived synthetic 4p x 3i x 2r dataset with negative sigma_r and sigma_ir estimates; not from a textbook",
+  "source": "Expected values derived from exact mean squares with the same EMS formulas the estimator implements; the EMS inversion was checked symbolically from the random-effects model (salib journal 2026-10-23). Exact components: 9/4, 3/4, -1/24, 1/4, 3/8, -1/72, 7/72.",
   "derivation": {
     "method": "Three-way random-effects ANOVA with Expected Mean Squares",
     "grand_mean": 5.833333,
@@ -57,13 +57,15 @@
     "sigma_pr": 0.375000,
     "sigma_ir": -0.013889,
     "sigma_pir": 0.097222,
-    "g_coefficient": 0.886861,
-    "phi_coefficient": 0.814070,
+    "g_coefficient": "243/274",
+    "phi_coefficient": "unavailable: negative sigma_r",
+    "phi_coefficient_negatives_zeroed": "243/301",
     "d_study_6_4": {
       "n_items": 6,
       "n_raters": 4,
-      "g_coefficient": 0.941632,
-      "phi_coefficient": 0.898752
+      "g_coefficient": "3888/4129",
+      "phi_coefficient": "unavailable: negative sigma_r",
+      "phi_coefficient_negatives_zeroed": "3888/4345"
     }
   }
 }
