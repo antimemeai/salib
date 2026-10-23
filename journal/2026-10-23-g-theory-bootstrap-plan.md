@@ -280,6 +280,6 @@ Fixed:
 - **Docs.** The method docs now describe the actual procedures and
   `n_resamples` per stream.
 
-The first full study run was started on neuroses with the pre-review harness.
-It is discarded, because its Satterthwaite rows would have been invalid and
-one replicate error could abort the whole run.
+A full study run was attempted on neuroses with the pre-review harness. The
+connection dropped during its build and it never started (see
+journal/2026-10-23-infra-block.md).
