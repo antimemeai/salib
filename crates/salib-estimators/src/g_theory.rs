@@ -38,6 +38,7 @@ use std::fmt;
 use ndarray::{Array3, ArrayView3};
 use rand::RngCore;
 use salib_core::RngState;
+use statrs::distribution::{ContinuousCDF, FisherSnedecor};
 
 use crate::bootstrap::percentile_value;
 use crate::bootstrap_given_data::BootstrapGivenDataError;
@@ -186,7 +187,11 @@ pub type GTheoryCoefficient = Result<f64, GTheoryCoefficientError>;
 /// [`negative_components_zeroed`](Self::negative_components_zeroed) is set.
 /// The coefficients refer to [`n_items`](Self::n_items) items and
 /// [`n_raters`](Self::n_raters) raters, which are the observed counts for a
-/// G-study. Interval fields are populated only by bootstrap estimation.
+/// G-study. [`bootstrap`](Self::bootstrap) is set only by
+/// [`estimate_g_theory_pir_with_bootstrap`]; read its intervals through
+/// [`g_coefficient_interval`](Self::g_coefficient_interval) and
+/// [`phi_coefficient_interval`](Self::phi_coefficient_interval), which apply
+/// the attachment rules.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
@@ -216,30 +221,8 @@ pub struct GTheoryResult {
     /// Whether negative estimates were replaced by zero via
     /// [`with_negative_components_zeroed`](Self::with_negative_components_zeroed).
     pub negative_components_zeroed: bool,
-    /// Lower percentile bounds in [`GTheoryComponent::ALL`] order; `None` without
-    /// bootstrap, and a `None` entry where failed resamples leave a bound unidentifiable.
-    pub variance_component_ci_low: Option<Vec<Option<f64>>>,
-    /// Upper percentile bounds in [`GTheoryComponent::ALL`] order; `None` without
-    /// bootstrap, and a `None` entry where failed resamples leave a bound unidentifiable.
-    pub variance_component_ci_high: Option<Vec<Option<f64>>>,
-    /// Lower percentile bound for G; `None` without bootstrap or when unavailable.
-    pub g_coefficient_ci_low: Option<f64>,
-    /// Upper percentile bound for G; `None` without bootstrap or when unavailable.
-    pub g_coefficient_ci_high: Option<f64>,
-    /// Lower percentile bound for Phi; `None` without bootstrap or when unavailable.
-    pub phi_coefficient_ci_low: Option<f64>,
-    /// Upper percentile bound for Phi; `None` without bootstrap or when unavailable.
-    pub phi_coefficient_ci_high: Option<f64>,
-    /// Number of requested bootstrap resamples; `None` without bootstrap.
-    pub bootstrap_iterations: Option<usize>,
-    /// Significance level for intervals of nominal coverage `1-alpha`; `None` without bootstrap.
-    pub bootstrap_alpha: Option<f64>,
-    /// Resamples whose fit failed, bounded as unknown values in every interval; `None` without bootstrap.
-    pub bootstrap_skipped: Option<usize>,
-    /// Fitted resamples whose clipped G was 0/0, bounded as unknown values; `None` without bootstrap.
-    pub g_coefficient_failed: Option<usize>,
-    /// Fitted resamples whose clipped Phi was 0/0, bounded as unknown values; `None` without bootstrap.
-    pub phi_coefficient_failed: Option<usize>,
+    /// Bootstrap and interval results; `None` without bootstrap.
+    pub bootstrap: Option<GTheoryBootstrap>,
 }
 
 impl GTheoryResult {
@@ -293,14 +276,38 @@ impl GTheoryResult {
     /// the zeros back into the remaining equations, and not a constrained
     /// (e.g. REML) fit, which would reallocate the variance. The copy sets
     /// [`negative_components_zeroed`](Self::negative_components_zeroed), even
-    /// when nothing was negative, because the flag records the procedure. It
-    /// drops all bootstrap fields, which describe the signed procedure.
+    /// when nothing was negative, because the flag records the procedure.
+    ///
+    /// Bootstrap results carry over except the component standard errors,
+    /// which describe the signed estimates. The G interval is a function of
+    /// the signed mean squares, so the clipped G can lie outside it.
     #[must_use]
     pub fn with_negative_components_zeroed(&self) -> Self {
         let zeroed = self.components().map(|c| if c < 0.0 { 0.0 } else { c });
         let mut result = Self::new(zeroed, self.n_items, self.n_raters);
         result.negative_components_zeroed = true;
+        result.bootstrap = self.bootstrap.clone().map(|mut boot| {
+            boot.component_se = [None; 7];
+            boot
+        });
         result
+    }
+
+    /// Interval for G from [`GTheoryBootstrap::g_coefficient_ci`], whenever it exists.
+    #[must_use]
+    pub fn g_coefficient_interval(&self) -> Option<(f64, f64)> {
+        self.bootstrap.as_ref()?.g_coefficient_ci
+    }
+
+    /// Interval for Phi from [`GTheoryBootstrap::phi_coefficient_ci`], only
+    /// when this result's Phi is available. That interval describes the
+    /// clipped estimator, which equals an available Phi.
+    #[must_use]
+    pub fn phi_coefficient_interval(&self) -> Option<(f64, f64)> {
+        self.phi_coefficient
+            .is_ok()
+            .then(|| self.bootstrap.as_ref()?.phi_coefficient_ci)
+            .flatten()
     }
 
     /// Components in [`GTheoryComponent::ALL`] order.
@@ -335,17 +342,7 @@ impl GTheoryResult {
             g_coefficient,
             phi_coefficient,
             negative_components_zeroed: false,
-            variance_component_ci_low: None,
-            variance_component_ci_high: None,
-            g_coefficient_ci_low: None,
-            g_coefficient_ci_high: None,
-            phi_coefficient_ci_low: None,
-            phi_coefficient_ci_high: None,
-            bootstrap_iterations: None,
-            bootstrap_alpha: None,
-            bootstrap_skipped: None,
-            g_coefficient_failed: None,
-            phi_coefficient_failed: None,
+            bootstrap: None,
         }
     }
 }
@@ -677,15 +674,15 @@ pub fn estimate_g_theory_pir(
     Ok(GTheoryResult::new(components, i, r))
 }
 
-/// Estimate G-theory components/coefficients and attach bootstrap intervals.
+/// Estimate G-theory components/coefficients and attach bootstrap results.
 ///
 /// Combines [`estimate_g_theory_pir`] with [`bootstrap_g_theory_pir`]; read the
-/// latter for what the intervals mean and what they do not.
+/// latter for what each interval and standard error means and what it does not.
 ///
 /// # Errors
 ///
 /// Returns [`GTheoryBootstrapError`] on an invalid original grid or arguments,
-/// or if every draw fails.
+/// or if every draw of a stream fails.
 pub fn estimate_g_theory_pir_with_bootstrap(
     grid: ArrayView3<'_, f64>,
     design: GTheoryDesign,
@@ -694,92 +691,268 @@ pub fn estimate_g_theory_pir_with_bootstrap(
     rng: &mut RngState,
 ) -> Result<GTheoryResult, GTheoryBootstrapError> {
     let mut result = estimate_g_theory_pir(grid, design)?;
-    let boot = bootstrap_g_theory_pir(grid, design, n_resamples, alpha, rng)?;
-    result.variance_component_ci_low =
-        Some(boot.component_ci.iter().map(|ci| ci.map(|c| c.0)).collect());
-    result.variance_component_ci_high =
-        Some(boot.component_ci.iter().map(|ci| ci.map(|c| c.1)).collect());
-    // The bootstrap's coefficient intervals describe the clipped estimator,
-    // which equals the point coefficient exactly when that is available.
-    let g_ci = boot
-        .g_coefficient_ci
-        .filter(|_| result.g_coefficient.is_ok());
-    let phi_ci = boot
-        .phi_coefficient_ci
-        .filter(|_| result.phi_coefficient.is_ok());
-    result.g_coefficient_ci_low = g_ci.map(|ci| ci.0);
-    result.g_coefficient_ci_high = g_ci.map(|ci| ci.1);
-    result.phi_coefficient_ci_low = phi_ci.map(|ci| ci.0);
-    result.phi_coefficient_ci_high = phi_ci.map(|ci| ci.1);
-    result.bootstrap_iterations = Some(boot.n_resamples);
-    result.bootstrap_alpha = Some(boot.alpha);
-    result.bootstrap_skipped = Some(boot.n_skipped);
-    result.g_coefficient_failed = Some(boot.g_coefficient_failed);
-    result.phi_coefficient_failed = Some(boot.phi_coefficient_failed);
+    result.bootstrap = Some(bootstrap_g_theory_pir(
+        grid,
+        design,
+        n_resamples,
+        alpha,
+        rng,
+    )?);
     Ok(result)
 }
 
-/// Percentile intervals from [`bootstrap_g_theory_pir`].
-#[derive(Debug, Clone)]
+/// A facet of the crossed `p × i × r` design.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum GTheoryFacet {
+    /// Persons.
+    P,
+    /// Items.
+    I,
+    /// Raters.
+    R,
+}
+
+impl GTheoryFacet {
+    const ALL: [Self; 3] = [Self::P, Self::I, Self::R];
+
+    fn axis(self) -> usize {
+        match self {
+            Self::P => 0,
+            Self::I => 1,
+            Self::R => 2,
+        }
+    }
+}
+
+/// Facets of each component as a bit mask over (p, i, r), in
+/// [`GTheoryComponent::ALL`] order.
+const COMPONENT_FACETS: [u8; 7] = [0b001, 0b010, 0b100, 0b011, 0b101, 0b110, 0b111];
+
+fn component_index(mask: u8) -> usize {
+    COMPONENT_FACETS
+        .iter()
+        .position(|&m| m == mask)
+        .unwrap_or(usize::MAX)
+}
+
+/// Tong & Brennan's resampling plan for each component's standard error.
+///
+/// A main effect uses its own facet (CASMA 5, Rule 1). An interaction uses its
+/// facet with the most levels (Rule 2); ties are broken in p, i, r order,
+/// which is salib's choice, not the source's. The discretionary Rule 3 is not
+/// applied. The rules were "supported by normal-data simulations" at
+/// 100 × 20 × 2 only.
+#[must_use]
+pub fn g_theory_resampling_plan(sizes: [usize; 3]) -> [GTheoryFacet; 7] {
+    COMPONENT_FACETS.map(|mask| {
+        let mut best: Option<GTheoryFacet> = None;
+        for facet in GTheoryFacet::ALL {
+            if mask & (1 << facet.axis()) != 0
+                && best.is_none_or(|b| sizes[facet.axis()] > sizes[b.axis()])
+            {
+                best = Some(facet);
+            }
+        }
+        best.unwrap_or(GTheoryFacet::P)
+    })
+}
+
+/// Correct one single-facet replicate (Brennan 2006, CASMA 21, Eq. 73 with
+/// λ = {j}): `σ̂²(α|j)·n_j/(n_j − 1)` when `j ∈ α`, otherwise
+/// `σ̂²(α|j) − σ̂²(α ∪ j | j)/(n_j − 1)`. Conditional on the data, corrected
+/// replicates average exactly to the observed estimates.
+fn correct_single_facet(replicate: [f64; 7], facet: GTheoryFacet, sizes: [usize; 3]) -> [f64; 7] {
+    let n = sizes[facet.axis()] as f64;
+    let bit = 1_u8 << facet.axis();
+    std::array::from_fn(|k| {
+        let mask = COMPONENT_FACETS[k];
+        if mask & bit != 0 {
+            replicate[k] * n / (n - 1.0)
+        } else {
+            replicate[k] - replicate[component_index(mask | bit)] / (n - 1.0)
+        }
+    })
+}
+
+/// Fit a resample, treating a constant one as having every component zero.
+fn fit_replicate(
+    grid: ArrayView3<'_, f64>,
+    design: GTheoryDesign,
+) -> Result<GTheoryResult, GTheoryError> {
+    let (i, r) = (grid.shape()[1], grid.shape()[2]);
+    match estimate_g_theory_pir(grid, design) {
+        Err(GTheoryError::ZeroVariance) => Ok(GTheoryResult::new([0.0; 7], i, r)),
+        other => other,
+    }
+}
+
+/// Standard uniform on the open interval (0, 1), from 53 random bits.
+fn open_unit(rng: &mut impl RngCore) -> f64 {
+    ((rng.next_u64() >> 11) as f64 + 0.5) / (1_u64 << 53) as f64
+}
+
+/// Balanced normal random-effects arrays: seven independent effect arrays,
+/// each `N(0, σ²)` with the given standard deviations, summed per cell.
+struct ParametricGenerator {
+    sizes: [usize; 3],
+    effects: [Vec<f64>; 7],
+    normal: salib_core::Distribution,
+}
+
+impl ParametricGenerator {
+    fn new(sizes: [usize; 3]) -> Self {
+        let [np, ni, nr] = sizes;
+        Self {
+            sizes,
+            effects: [
+                vec![0.0; np],
+                vec![0.0; ni],
+                vec![0.0; nr],
+                vec![0.0; np * ni],
+                vec![0.0; np * nr],
+                vec![0.0; ni * nr],
+                vec![0.0; np * ni * nr],
+            ],
+            normal: salib_core::Distribution::Normal {
+                mu: 0.0,
+                sigma: 1.0,
+            },
+        }
+    }
+
+    fn fill(&mut self, out: &mut Array3<f64>, scale: &[f64; 7], rng: &mut impl RngCore) {
+        let [_, ni, nr] = self.sizes;
+        for (k, effect) in self.effects.iter_mut().enumerate() {
+            for value in effect.iter_mut() {
+                *value = scale[k] * self.normal.quantile(open_unit(rng));
+            }
+        }
+        let e = &self.effects;
+        for ((a, b, c), value) in out.indexed_iter_mut() {
+            *value = e[0][a]
+                + e[1][b]
+                + e[2][c]
+                + e[3][a * ni + b]
+                + e[4][a * nr + c]
+                + e[5][b * nr + c]
+                + e[6][(a * ni + b) * nr + c];
+        }
+    }
+}
+
+/// Closed-form interval for G at the G-study counts.
+///
+/// `1 − G = (EMS_pi + EMS_pr − EMS_pir)/EMS_p`, so under normality
+/// `(1 − Ĝ)/(1 − G) ≈ F(ν̂, n_p − 1)`, where `L = MS_pi + MS_pr − MS_pir` and
+/// `ν̂ = L²/(MS_pi²/df_pi + MS_pr²/df_pr + MS_pir²/df_pir)` (Satterthwaite).
+/// This generalizes Feldt's p × i interval. The identity and `ν̂` are checked
+/// symbolically in `verify/sage/g_theory_f_interval.sage`; the F law is an
+/// approximation. Unavailable when `L ≤ 0`, when `ν̂ < 0.5`, or when an F
+/// quantile does not reproduce its probability. The lower bound is clipped at 0.
+fn g_f_interval(components: [f64; 7], sizes: [usize; 3], alpha: f64) -> Option<(f64, f64)> {
+    let [p, _, _, pi, pr, _, pir] = components;
+    let (np, ni, nr) = (sizes[0] as f64, sizes[1] as f64, sizes[2] as f64);
+    // Mean squares, recovered exactly from the expected-mean-square equations.
+    let ms_pi = pir + nr * pi;
+    let ms_pr = pir + ni * pr;
+    let ms_pir = pir;
+    let ms_p = ms_pi + ms_pr - ms_pir + ni * nr * p;
+    let l = ms_pi + ms_pr - ms_pir;
+    if !(l > 0.0 && ms_p > 0.0) {
+        return None;
+    }
+    let df_pi = (np - 1.0) * (ni - 1.0);
+    let df_pr = (np - 1.0) * (nr - 1.0);
+    let df_pir = df_pi * (nr - 1.0);
+    let nu = l * l / (ms_pi * ms_pi / df_pi + ms_pr * ms_pr / df_pr + ms_pir * ms_pir / df_pir);
+    if nu.is_nan() || nu < 0.5 {
+        return None;
+    }
+    let f = FisherSnedecor::new(nu, np - 1.0).ok()?;
+    let quantile = |prob: f64| {
+        let q = f.inverse_cdf(prob);
+        (q.is_finite() && q > 0.0 && (f.cdf(q) - prob).abs() <= 1e-9).then_some(q)
+    };
+    let (q_low, q_high) = (quantile(alpha / 2.0)?, quantile(1.0 - alpha / 2.0)?);
+    let one_minus_g = l / ms_p;
+    Some((
+        (1.0 - one_minus_g / q_low).max(0.0),
+        1.0 - one_minus_g / q_high,
+    ))
+}
+
+/// Results of [`bootstrap_g_theory_pir`].
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub struct GTheoryBootstrap {
-    /// `(low, high)` for each signed component in [`GTheoryComponent::ALL`]
-    /// order; `None` where failed fits make a bound unidentifiable.
+    /// Resampling facet behind each component's standard error, in
+    /// [`GTheoryComponent::ALL`] order ([`g_theory_resampling_plan`]).
+    pub plan: [GTheoryFacet; 7],
+    /// Standard error of each signed component: the SD of its plan's corrected
+    /// replicates. `None` when that stream had a failed fit, or when the
+    /// result's components were zeroed.
+    pub component_se: [Option<f64>; 7],
+    /// Parametric-bootstrap percentile interval for each component; `None`
+    /// where failed fits make a bound unidentifiable.
     pub component_ci: [Option<(f64, f64)>; 7],
-    /// `(low, high)` for the clipped G estimator; `None` when failed
-    /// replicates make a bound unidentifiable.
+    /// Closed-form F interval for G at the grid's counts; `None` when unavailable.
     pub g_coefficient_ci: Option<(f64, f64)>,
-    /// `(low, high)` for the clipped Phi estimator; `None` when failed
-    /// replicates make a bound unidentifiable.
+    /// Parametric-bootstrap percentile interval for the clipped Phi estimator.
     pub phi_coefficient_ci: Option<(f64, f64)>,
-    /// Number of resamples drawn.
+    /// Draws per stream: three facet streams and one parametric stream.
     pub n_resamples: usize,
-    /// Significance level: bounds are the `alpha/2` and `1 − alpha/2` percentiles.
+    /// Two-sided level: bounds are the `alpha/2` and `1 − alpha/2` points.
     pub alpha: f64,
-    /// Resamples whose fit failed.
-    pub n_skipped: usize,
-    /// Fitted resamples whose clipped G was 0/0.
-    pub g_coefficient_failed: usize,
-    /// Fitted resamples whose clipped Phi was 0/0.
+    /// Failed fits in the p, i and r facet streams.
+    pub facet_skipped: [usize; 3],
+    /// Failed fits in the parametric stream.
+    pub parametric_skipped: usize,
+    /// Parametric replicates whose clipped Phi was 0/0.
     pub phi_coefficient_failed: usize,
 }
 
-/// Bootstrap percentile intervals for the components, G and Phi.
+/// Bootstrap standard errors and intervals for the components, G and Phi.
 ///
-/// **Plan:** each replicate resamples persons, items and raters independently,
-/// with replacement, refits the signed moment estimates, and evaluates G and
-/// Phi at the grid's counts. No bias correction is applied. For crossed
-/// designs this plan's replicates are biased: in a 20 × 8 × 4 normal simulation
-/// with every true component equal to 1, replicates averaged +0.33 above the
-/// estimate for σ²(p) and −0.38 below it for σ²(pir) (salib #5). Treat the
-/// intervals as descriptive, not as calibrated confidence intervals.
+/// Four procedures, each matched to the evidence for it (salib #5; research
+/// notes `papers/2026-10-23-gtheory-bootstrap-performance.md` and
+/// `papers/2026-10-23-pigeonhole-bootstrap-theory.md`):
 ///
-/// Component intervals use the signed replicate estimates. Replicate G and Phi
-/// use [`GTheoryResult::with_negative_components_zeroed`]: a percentile
-/// interval needs an estimator defined on every resample, and the signed rule
-/// would leave a coefficient undefined on many of them. In Brennan's Synthetic
-/// Data Set No. 3, roughly 40% of resamples have a negative σ²(i) or σ²(r).
-/// When the point coefficient is available, its components are nonnegative,
-/// so it equals the clipped estimator at the sample.
+/// - **Component standard errors.** Each component resamples one facet,
+///   chosen by [`g_theory_resampling_plan`] (Tong & Brennan, CASMA 5/15). Each
+///   replicate is corrected with Brennan's CASMA 21 formula, so the corrected
+///   replicates centre exactly on the observed estimates, and the standard
+///   error is their SD. Tong & Brennan validated these standard errors for
+///   normal data at 100 × 20 × 2 only; with few rater levels the rater
+///   standard error is too small (SD ratio about 0.6–0.8 at 20 × 8 × 2–4).
+/// - **Component intervals.** Parametric bootstrap: the point components,
+///   with negatives zeroed, generate normal effect arrays at the grid's
+///   counts. Each array is refitted, and the interval is the percentile range
+///   of the signed replicate estimates.
+/// - **G interval.** Closed-form F interval from the observed mean squares
+///   (see `g_f_interval` in the source). It holds at the grid's counts only.
+/// - **Phi interval.** Percentile interval of the clipped Phi over the
+///   parametric replicates.
 ///
-/// A resample whose observations are all identical has every component exactly
-/// zero; its G and Phi are 0/0. A replicate *fails* for a quantity when its fit
-/// fails or its clipped coefficient is 0/0. Failed replicates are not dropped: each bound is the most
-/// conservative value of the `alpha/2` or `1 − alpha/2` percentile of all
-/// `n_resamples` replicates, over every value the failed ones could have had.
-/// The bound is therefore unavailable once failures reach the tail
-/// fraction. The coefficient intervals here always describe the clipped
-/// estimator, so they exist even when the signed point coefficient does not;
-/// [`estimate_g_theory_pir_with_bootstrap`] attaches them only where the point
-/// coefficient is available.
+/// None of these intervals is claimed to be calibrated beyond the coverage
+/// study recorded in salib's `papers/`. Non-normal data, near-zero components,
+/// facets with two or three levels and D-study counts are unsupported.
 ///
-/// Requires a valid crossed grid, positive `n_resamples` and finite
-/// `0 < alpha < 1`; advances `rng`.
+/// A failed replicate is not dropped: each percentile bound holds for any
+/// value the failed replicates could have had, and it is unavailable once
+/// failures reach the tail fraction. A constant resample counts as having
+/// every component zero.
+///
+/// Every call draws one word from `rng` as a nonce and uses child streams
+/// forked from it: `g-theory/boot-p`, `/boot-i`, `/boot-r` and `/parametric`.
+/// `n_resamples` applies to each stream. Results are bit-reproducible for a
+/// given `rng`, platform and statrs version.
 ///
 /// # Errors
 ///
 /// Returns [`GTheoryBootstrapError`] if the original grid or arguments are
-/// invalid or every draw fails.
+/// invalid, or if every draw of a stream fails.
 pub fn bootstrap_g_theory_pir(
     grid: ArrayView3<'_, f64>,
     design: GTheoryDesign,
@@ -787,8 +960,7 @@ pub fn bootstrap_g_theory_pir(
     alpha: f64,
     rng: &mut RngState,
 ) -> Result<GTheoryBootstrap, GTheoryBootstrapError> {
-    // Fitting the original grid validates it; its errors are the caller's.
-    estimate_g_theory_pir(grid, design)?;
+    let point = estimate_g_theory_pir(grid, design)?;
     if n_resamples == 0 {
         return Err(GTheoryBootstrapError::Bootstrap(
             BootstrapGivenDataError::ZeroResamples,
@@ -799,76 +971,92 @@ pub fn bootstrap_g_theory_pir(
             BootstrapGivenDataError::OutOfRangeAlpha { alpha },
         ));
     }
+    let sizes = [grid.shape()[0], grid.shape()[1], grid.shape()[2]];
+    let mut parent = rng.clone().into_chacha();
+    let nonce = parent.next_u64().to_le_bytes();
+    let child = |name: &[u8]| rng.fork(&[name, &nonce].concat()).into_chacha();
 
-    let p = grid.shape()[0];
-    let i = grid.shape()[1];
-    let r = grid.shape()[2];
-    let mut chacha = rng.clone().into_chacha();
-    let mut p_idx = vec![0usize; p];
-    let mut i_idx = vec![0usize; i];
-    let mut r_idx = vec![0usize; r];
-    let mut resampled = Array3::<f64>::zeros((p, i, r));
-    let mut component_samples = (0..7)
-        .map(|_| Vec::with_capacity(n_resamples))
-        .collect::<Vec<_>>();
-    let mut g_samples = Vec::with_capacity(n_resamples);
-    let mut phi_samples = Vec::with_capacity(n_resamples);
-    let mut n_skipped = 0usize;
-    let mut g_failed = 0usize;
-    let mut phi_failed = 0usize;
-
-    for _ in 0..n_resamples {
-        for idx in &mut p_idx {
-            *idx = (chacha.next_u32() as usize) % p;
-        }
-        for idx in &mut i_idx {
-            *idx = (chacha.next_u32() as usize) % i;
-        }
-        for idx in &mut r_idx {
-            *idx = (chacha.next_u32() as usize) % r;
-        }
-        for out_p in 0..p {
-            for out_i in 0..i {
-                for out_r in 0..r {
-                    resampled[[out_p, out_i, out_r]] =
-                        grid[[p_idx[out_p], i_idx[out_i], r_idx[out_r]]];
-                }
+    // Component standard errors: one corrected single-facet stream per facet.
+    let plan = g_theory_resampling_plan(sizes);
+    let mut component_se = [None; 7];
+    let mut facet_skipped = [0usize; 3];
+    let mut resampled = Array3::<f64>::zeros(grid.raw_dim());
+    for facet in GTheoryFacet::ALL {
+        let axis = facet.axis();
+        let mut stream = child(match facet {
+            GTheoryFacet::P => b"g-theory/boot-p".as_slice(),
+            GTheoryFacet::I => b"g-theory/boot-i".as_slice(),
+            GTheoryFacet::R => b"g-theory/boot-r".as_slice(),
+        });
+        let mut draw = vec![0usize; sizes[axis]];
+        let mut replicates: Vec<[f64; 7]> = Vec::with_capacity(n_resamples);
+        for _ in 0..n_resamples {
+            for level in &mut draw {
+                *level = (stream.next_u32() as usize) % sizes[axis];
+            }
+            for ((a, b, c), value) in resampled.indexed_iter_mut() {
+                let mut src = [a, b, c];
+                src[axis] = draw[src[axis]];
+                *value = grid[src];
+            }
+            match fit_replicate(resampled.view(), design) {
+                Ok(fit) => replicates.push(correct_single_facet(fit.components(), facet, sizes)),
+                Err(_) => facet_skipped[axis] += 1,
             }
         }
-        let fit = match estimate_g_theory_pir(resampled.view(), design) {
-            Err(GTheoryError::ZeroVariance) => Ok(GTheoryResult::new([0.0; 7], i, r)),
-            other => other,
-        };
-        match fit {
-            Ok(est) => {
-                for (samples, value) in component_samples.iter_mut().zip(est.components()) {
+        if replicates.is_empty() {
+            return Err(GTheoryBootstrapError::AllResamplesFailed);
+        }
+        if facet_skipped[axis] == 0 && n_resamples >= 2 {
+            let m = n_resamples as f64;
+            for k in (0..7).filter(|&k| plan[k] == facet) {
+                // Two-pass: the mean can be large relative to the spread.
+                let mean = replicates.iter().map(|x| x[k]).sum::<f64>() / m;
+                let ss = replicates
+                    .iter()
+                    .map(|x| (x[k] - mean).powi(2))
+                    .sum::<f64>();
+                component_se[k] = Some((ss / (m - 1.0)).sqrt());
+            }
+        }
+    }
+
+    // Parametric stream: normal effect arrays from the zeroed point components.
+    let generating = point.with_negative_components_zeroed().components();
+    let scale = generating.map(f64::sqrt);
+    let mut stream = child(b"g-theory/parametric");
+    let mut component_samples: Vec<Vec<f64>> =
+        (0..7).map(|_| Vec::with_capacity(n_resamples)).collect();
+    let mut phi_samples = Vec::with_capacity(n_resamples);
+    let mut parametric_skipped = 0usize;
+    let mut phi_failed = 0usize;
+    let mut generator = ParametricGenerator::new(sizes);
+    for _ in 0..n_resamples {
+        generator.fill(&mut resampled, &scale, &mut stream);
+        match fit_replicate(resampled.view(), design) {
+            Ok(fit) => {
+                for (samples, value) in component_samples.iter_mut().zip(fit.components()) {
                     samples.push(value);
                 }
-                // Replicate coefficients use the clip-after-solving estimator,
-                // which is defined on every resample and equals the point
-                // coefficient whenever that is available.
-                let clipped = est.with_negative_components_zeroed();
-                match clipped.g_coefficient {
-                    Ok(g) => g_samples.push(g),
-                    Err(_) => g_failed += 1,
-                }
-                match clipped.phi_coefficient {
+                match fit.with_negative_components_zeroed().phi_coefficient {
                     Ok(phi) => phi_samples.push(phi),
                     Err(_) => phi_failed += 1,
                 }
             }
-            Err(_) => n_skipped += 1,
+            Err(_) => parametric_skipped += 1,
         }
     }
-    *rng = RngState::snapshot(&chacha, rng);
-    if n_skipped == n_resamples {
+    if parametric_skipped == n_resamples {
         return Err(GTheoryBootstrapError::AllResamplesFailed);
     }
-    let component_ci =
-        std::array::from_fn(|k| bounded_percentiles(&component_samples[k], n_skipped, alpha));
+    *rng = RngState::snapshot(&parent, rng);
     Ok(GTheoryBootstrap {
-        component_ci,
-        g_coefficient_ci: bounded_percentiles(&g_samples, n_resamples - g_samples.len(), alpha),
+        plan,
+        component_se,
+        component_ci: std::array::from_fn(|k| {
+            bounded_percentiles(&component_samples[k], parametric_skipped, alpha)
+        }),
+        g_coefficient_ci: g_f_interval(point.components(), sizes, alpha),
         phi_coefficient_ci: bounded_percentiles(
             &phi_samples,
             n_resamples - phi_samples.len(),
@@ -876,8 +1064,8 @@ pub fn bootstrap_g_theory_pir(
         ),
         n_resamples,
         alpha,
-        n_skipped,
-        g_coefficient_failed: g_failed,
+        facet_skipped,
+        parametric_skipped,
         phi_coefficient_failed: phi_failed,
     })
 }
@@ -1258,6 +1446,211 @@ mod tests {
             err,
             GTheoryBootstrapError::Bootstrap(BootstrapGivenDataError::ZeroResamples)
         );
+    }
+
+    mod sage_oracle {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/oracles/g_theory_single_facet.rs"
+        ));
+    }
+
+    /// Every single-facet resample of each Sage case, through salib's own
+    /// resampling, fit and correction: the corrected mean must equal the exact
+    /// observed estimates and the variance the exact replicate variance
+    /// (CASMA 21 boot-λ T-term system, solved in Sage).
+    #[test]
+    fn single_facet_corrections_match_exact_enumeration() {
+        for case in sage_oracle::SINGLE_FACET_CASES {
+            let (np, ni, nr) = case.shape;
+            let sizes = [np, ni, nr];
+            let grid = Array3::from_shape_vec(case.shape, case.data.to_vec()).unwrap();
+            let facet = match case.facet {
+                'p' => GTheoryFacet::P,
+                'i' => GTheoryFacet::I,
+                _ => GTheoryFacet::R,
+            };
+            let axis = facet.axis();
+            let n = sizes[axis];
+            let total = n.pow(u32::try_from(n).unwrap());
+            assert_eq!(total, case.resamples);
+            let mut replicates = Vec::with_capacity(total);
+            let mut resampled = Array3::<f64>::zeros(grid.raw_dim());
+            for code in 0..total {
+                let draw: Vec<usize> = (0..n)
+                    .map(|d| code / n.pow(u32::try_from(d).unwrap()) % n)
+                    .collect();
+                for ((a, b, c), value) in resampled.indexed_iter_mut() {
+                    let mut src = [a, b, c];
+                    src[axis] = draw[src[axis]];
+                    *value = grid[src];
+                }
+                let fit = fit_replicate(resampled.view(), GTheoryDesign::Crossed).unwrap();
+                replicates.push(correct_single_facet(fit.components(), facet, sizes));
+            }
+            let m = total as f64;
+            // Each replicate carries rounding of order N·ε·scale²; summing m of
+            // them adds m·ε·scale². The bound is a generous multiple of both.
+            let scale = replicates
+                .iter()
+                .flatten()
+                .fold(0.0_f64, |a, v| a.max(v.abs()));
+            let n_cells = (np * ni * nr) as f64;
+            let tol = 64.0 * (n_cells + m) * f64::EPSILON * scale.max(1.0);
+            for k in 0..7 {
+                let mean = replicates.iter().map(|x| x[k]).sum::<f64>() / m;
+                let variance = replicates
+                    .iter()
+                    .map(|x| (x[k] - mean).powi(2))
+                    .sum::<f64>()
+                    / m;
+                assert!(
+                    (mean - case.estimates[k]).abs() <= tol,
+                    "{:?} {} component {k}: mean {mean}, exact {}",
+                    case.shape,
+                    case.facet,
+                    case.estimates[k]
+                );
+                assert!(
+                    (variance - case.replicate_variance[k]).abs() <= tol * scale.max(1.0),
+                    "{:?} {} component {k}: variance {variance}, exact {}",
+                    case.shape,
+                    case.facet,
+                    case.replicate_variance[k]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn resampling_plan_follows_tong_brennan_rules() {
+        use GTheoryFacet::{I, P, R};
+        assert_eq!(g_theory_resampling_plan([20, 8, 4]), [P, I, R, P, P, I, P]);
+        // Ties fall to p, then i (salib's choice).
+        assert_eq!(g_theory_resampling_plan([5, 5, 5]), [P, I, R, P, P, I, P]);
+        assert_eq!(g_theory_resampling_plan([2, 10, 3]), [P, I, R, I, R, I, I]);
+    }
+
+    #[test]
+    fn f_interval_contains_point_and_guards_its_domain() {
+        let point = estimate_g_theory_pir(
+            Array3::from_shape_fn((3, 3, 2), |(p, i, r)| {
+                (p * 3 + i * 2 + r + (p * i) % 2) as f64
+            })
+            .view(),
+            GTheoryDesign::Crossed,
+        )
+        .unwrap();
+        let g = point.g_coefficient.unwrap();
+        let wide = g_f_interval(point.components(), [3, 3, 2], 0.05).unwrap();
+        let narrow = g_f_interval(point.components(), [3, 3, 2], 0.2).unwrap();
+        assert!(
+            0.0 <= wide.0 && wide.0 < narrow.0 && narrow.0 < g,
+            "{wide:?} {narrow:?} {g}"
+        );
+        assert!(
+            g < narrow.1 && narrow.1 < wide.1 && wide.1 < 1.0,
+            "{wide:?} {narrow:?} {g}"
+        );
+        // L = MS_pi + MS_pr - MS_pir <= 0: no interval.
+        assert_eq!(
+            g_f_interval([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [5, 4, 3], 0.05),
+            None
+        );
+        assert_eq!(
+            g_f_interval([1.0, 0.0, 0.0, -0.5, 0.0, 0.0, 0.1], [5, 4, 3], 0.05),
+            None
+        );
+        // With σ²(pi) = σ²(pr) = 0 at 2×2×2, ν̂ = 1/3 < 0.5: no interval.
+        assert_eq!(
+            g_f_interval([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0], [2, 2, 2], 0.05),
+            None
+        );
+        // A tiny person component pushes the lower bound below 0, where it is clipped.
+        let low = g_f_interval([0.001, 0.1, 0.1, 1.0, 1.0, 0.1, 1.0], [20, 5, 2], 0.05).unwrap();
+        assert_eq!(low.0, 0.0);
+    }
+
+    /// The parametric generator's mean squares have the balanced normal-theory
+    /// law: E MS_e = EMS_e and Var MS_e = 2 EMS_e²/df_e (within 4 MCSE).
+    #[test]
+    fn parametric_generator_has_normal_theory_mean_square_moments() {
+        let sizes = [6, 4, 3];
+        let [np, ni, nr] = sizes.map(|v| v as f64);
+        let theta = [1.0, 0.5, 0.3, 0.8, 0.2, 0.4, 1.0];
+        let [p, i, r, pi, pr, ir, pir] = theta;
+        let ems = [
+            pir + nr * pi + ni * pr + ni * nr * p,
+            pir + nr * pi + np * ir + np * nr * i,
+            pir + ni * pr + np * ir + np * ni * r,
+            pir + nr * pi,
+            pir + ni * pr,
+            pir + np * ir,
+            pir,
+        ];
+        let df = [
+            np - 1.0,
+            ni - 1.0,
+            nr - 1.0,
+            (np - 1.0) * (ni - 1.0),
+            (np - 1.0) * (nr - 1.0),
+            (ni - 1.0) * (nr - 1.0),
+            (np - 1.0) * (ni - 1.0) * (nr - 1.0),
+        ];
+        let mut generator = ParametricGenerator::new(sizes);
+        let mut rng = RngState::from_seed([0x5a; 32]).into_chacha();
+        let mut out = Array3::<f64>::zeros((6, 4, 3));
+        let reps = 20_000;
+        let mut ms: Vec<[f64; 7]> = Vec::with_capacity(reps);
+        for _ in 0..reps {
+            generator.fill(&mut out, &theta.map(f64::sqrt), &mut rng);
+            let c = estimate_g_theory_pir(out.view(), GTheoryDesign::Crossed)
+                .unwrap()
+                .components();
+            let [p, i, r, pi, pr, ir, pir] = c;
+            ms.push([
+                pir + nr * pi + ni * pr + ni * nr * p,
+                pir + nr * pi + np * ir + np * nr * i,
+                pir + ni * pr + np * ir + np * ni * r,
+                pir + nr * pi,
+                pir + ni * pr,
+                pir + np * ir,
+                pir,
+            ]);
+        }
+        let n = reps as f64;
+        for k in 0..7 {
+            let variance = 2.0 * ems[k] * ems[k] / df[k];
+            let mean = ms.iter().map(|m| m[k]).sum::<f64>() / n;
+            let sample_var = ms.iter().map(|m| (m[k] - mean).powi(2)).sum::<f64>() / (n - 1.0);
+            assert!(
+                (mean - ems[k]).abs() <= 4.0 * (variance / n).sqrt(),
+                "MS {k} mean {mean} vs {}",
+                ems[k]
+            );
+            // Scaled χ²_df/df has excess kurtosis 12/df.
+            let se_var = variance * ((2.0 + 12.0 / df[k]) / n).sqrt();
+            assert!(
+                (sample_var - variance).abs() <= 4.0 * se_var,
+                "MS {k} var {sample_var} vs {variance}"
+            );
+        }
+    }
+
+    #[test]
+    fn bootstrap_is_reproducible_and_advances_its_state() {
+        let mut a = RngState::from_seed([0x44; 32]);
+        let mut b = RngState::from_seed([0x44; 32]);
+        let first = bootstrap_g_theory_pir(grid().view(), GTheoryDesign::Crossed, 64, 0.05, &mut a)
+            .unwrap();
+        let same = bootstrap_g_theory_pir(grid().view(), GTheoryDesign::Crossed, 64, 0.05, &mut b)
+            .unwrap();
+        assert_eq!(first, same);
+        assert_eq!(a, b);
+        let second =
+            bootstrap_g_theory_pir(grid().view(), GTheoryDesign::Crossed, 64, 0.05, &mut a)
+                .unwrap();
+        assert_ne!(first.component_ci, second.component_ci);
     }
 
     #[test]

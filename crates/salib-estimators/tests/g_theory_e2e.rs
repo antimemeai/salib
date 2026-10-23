@@ -6,7 +6,8 @@ use g_theory_fixtures::synthetic3;
 use ndarray::Array3;
 use salib_core::RngState;
 use salib_estimators::{
-    estimate_g_theory_pir, estimate_g_theory_pir_with_bootstrap, GTheoryDesign,
+    estimate_g_theory_pir, estimate_g_theory_pir_with_bootstrap, g_theory_resampling_plan,
+    GTheoryDesign,
 };
 
 fn grid() -> Array3<f64> {
@@ -45,58 +46,26 @@ fn g_theory_recovers_expected_components_and_coefficients() {
 }
 
 #[test]
-fn g_theory_bootstrap_is_deterministic_and_contains_point_estimate() {
+fn g_theory_bootstrap_is_deterministic_and_records_its_procedures() {
     let mut rng_a = RngState::from_seed([0x44; 32]);
     let mut rng_b = RngState::from_seed([0x44; 32]);
-    let a = estimate_g_theory_pir_with_bootstrap(
-        grid().view(),
-        GTheoryDesign::Crossed,
-        128,
-        0.05,
-        &mut rng_a,
-    )
-    .expect("g-theory bootstrap estimate");
-    let b = estimate_g_theory_pir_with_bootstrap(
-        grid().view(),
-        GTheoryDesign::Crossed,
-        128,
-        0.05,
-        &mut rng_b,
-    )
-    .expect("g-theory bootstrap estimate");
-    assert_eq!(a.variance_component_ci_low, b.variance_component_ci_low);
-    assert_eq!(a.variance_component_ci_high, b.variance_component_ci_high);
-    assert_eq!(a.g_coefficient_ci_low, b.g_coefficient_ci_low);
-    assert_eq!(a.g_coefficient_ci_high, b.g_coefficient_ci_high);
-    assert_eq!(a.phi_coefficient_ci_low, b.phi_coefficient_ci_low);
-    assert_eq!(a.phi_coefficient_ci_high, b.phi_coefficient_ci_high);
-    let low = a.variance_component_ci_low.as_ref().unwrap();
-    let high = a.variance_component_ci_high.as_ref().unwrap();
-    for (k, value) in a.components().iter().enumerate() {
-        let (low, high) = (low[k].unwrap(), high[k].unwrap());
-        assert!(low <= *value && *value <= high, "component {k}");
-    }
-    // Two persons: about half the resamples draw one person twice, leaving no
-    // person variance, so G is 0/0 there and its percentiles are unidentifiable.
-    // Phi is 0/0 when the resample is constant (one level drawn on every axis).
-    let g_failed = a.g_coefficient_failed.unwrap();
-    let phi_failed = a.phi_coefficient_failed.unwrap();
-    assert!(g_failed as f64 > 0.025 * 127.0 && phi_failed as f64 > 0.025 * 127.0);
-    assert_eq!(
-        (a.g_coefficient_ci_low, a.g_coefficient_ci_high),
-        (None, None)
-    );
-    assert_eq!(
-        (a.phi_coefficient_ci_low, a.phi_coefficient_ci_high),
-        (None, None)
-    );
+    let run = |rng: &mut RngState| {
+        estimate_g_theory_pir_with_bootstrap(grid().view(), GTheoryDesign::Crossed, 128, 0.05, rng)
+            .expect("g-theory bootstrap estimate")
+    };
+    let (a, b) = (run(&mut rng_a), run(&mut rng_b));
+    let boot = a.bootstrap.as_ref().expect("bootstrap results");
+    assert_eq!(Some(boot), b.bootstrap.as_ref());
+    assert_eq!(boot.plan, g_theory_resampling_plan([2, 2, 2]));
+    assert_eq!((boot.n_resamples, boot.alpha), (128, 0.05));
+    assert_eq!((boot.facet_skipped, boot.parametric_skipped), ([0; 3], 0));
+    assert!(boot.component_se.iter().all(Option::is_some));
 }
 
 #[test]
-fn g_theory_bootstrap_interval_contains_point_when_identifiable() {
+fn g_theory_intervals_contain_point_when_available() {
     let mut rng = RngState::from_seed([0x44; 32]);
-    // A person effect of one point per person keeps σ²(p) well clear of zero,
-    // so the clipped bounds are informative rather than pinned at 0.
+    // A person effect of one point per person keeps σ²(p) well clear of zero.
     let grid = synthetic3() + Array3::from_shape_fn((10, 4, 2), |(p, _, _)| p as f64);
     let r = estimate_g_theory_pir_with_bootstrap(
         grid.view(),
@@ -106,50 +75,23 @@ fn g_theory_bootstrap_interval_contains_point_when_identifiable() {
         &mut rng,
     )
     .expect("g-theory bootstrap estimate");
-    for (point, low, high) in [
-        (
-            r.g_coefficient,
-            r.g_coefficient_ci_low,
-            r.g_coefficient_ci_high,
-        ),
-        (
-            r.phi_coefficient,
-            r.phi_coefficient_ci_low,
-            r.phi_coefficient_ci_high,
-        ),
+    for (point, interval) in [
+        (r.g_coefficient, r.g_coefficient_interval()),
+        (r.phi_coefficient, r.phi_coefficient_interval()),
     ] {
-        let (point, low, high) = (point.unwrap(), low.unwrap(), high.unwrap());
+        let (point, (low, high)) = (point.unwrap(), interval.unwrap());
         assert!(
             0.0 < low && low < point && point < high && high < 1.0,
             "{low} {point} {high}"
         );
     }
-}
-
-#[test]
-fn g_theory_bootstrap_records_all_component_intervals_and_metadata() {
-    let mut rng = RngState::from_seed([0x44; 32]);
-    let r = estimate_g_theory_pir_with_bootstrap(
-        grid().view(),
-        GTheoryDesign::Crossed,
-        128,
-        0.05,
-        &mut rng,
-    )
-    .expect("g-theory bootstrap estimate");
-    assert_eq!(
-        r.variance_component_ci_low.as_ref().expect("CI lows").len(),
-        7
-    );
-    assert_eq!(
-        r.variance_component_ci_high
-            .as_ref()
-            .expect("CI highs")
-            .len(),
-        7
-    );
-    assert_eq!(r.bootstrap_iterations, Some(128));
-    assert_eq!(r.bootstrap_alpha, Some(0.05));
-    assert!(r.bootstrap_skipped.is_some());
-    assert!(r.g_coefficient_failed.is_some() && r.phi_coefficient_failed.is_some());
+    let boot = r.bootstrap.as_ref().unwrap();
+    for (k, value) in r.components().iter().enumerate() {
+        let (low, high) = boot.component_ci[k].unwrap();
+        assert!(
+            low < *value && *value < high,
+            "component {k}: {low} {value} {high}"
+        );
+        assert!(boot.component_se[k].unwrap() > 0.0);
+    }
 }
