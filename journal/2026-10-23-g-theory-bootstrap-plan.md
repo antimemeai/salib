@@ -239,3 +239,47 @@ adopted:
   in place of the flat interval fields. Methods apply the attachment rules.
   Bit-reproducibility now also depends on the statrs version, and the docs
   state it.
+
+## Code review
+
+A fresh reviewer read the diff and found no blockers. It verified:
+- Eq. 73 equals the T-term boot-λ solve replicate by replicate, with zero
+  difference on five shapes and every facet.
+- The enumeration tolerance catches plausible bugs: dropping n/(n−1),
+  dividing by n, or subtracting the corrected term each shift the means by
+  0.5–8, against a tolerance of at most 7e-11.
+- The generator indexing is correct.
+- The dichotomous truth (Sheppard plus Möbius inversion) matches 200,000
+  simulated datasets, |z| ≤ 2.07.
+- The 0.3.0 baseline is faithful to the old code.
+
+Fixed:
+- **F interval.** It could return (0, negative) near Ĝ = 0; both bounds are
+  now clipped to [0, 1].
+- **Quantiles.** statrs `inverse_cdf` is unreliable at small and huge degrees
+  of freedom, so quantiles now come from bisection on statrs' cdf, which is
+  reliable there. This also fixes the harness's Satterthwaite comparator,
+  which was NaN for every ν ≤ 1.
+- **Harness robustness.**
+  - A replicate error is recorded and counted as a miss; it no longer aborts
+    the run.
+  - Rows are written as each cell finishes.
+  - A cell-range argument allows sharding.
+  - Seeds are keyed by the cell's description, not its position.
+  - The SE ratio is now √(mean SE²)/SD (Morris et al. 2019).
+  - The generator uses Box–Muller, independent of salib's inverse-CDF
+    machinery.
+- **Pinned F oracle.** Four cases computed in Sage with 50-digit mpmath F
+  quantiles; this catches a swapped degrees-of-freedom pair.
+- **Sage drift check.** It never matched any file: a plain pathspec `*` does
+  not cross directories as written, so the check passed on any drift. It now
+  uses `:(glob)` and includes untracked files, and failing on uncommitted
+  oracles is confirmed. The oracle grids are fixed integer formulas, not
+  Sage's random generator, and the 4×2×2 case is added.
+- **RNG.** It advances before any error return.
+- **Docs.** The method docs now describe the actual procedures and
+  `n_resamples` per stream.
+
+The first full study run was started on neuroses with the pre-review harness.
+It is discarded, because its Satterthwaite rows would have been invalid and
+one replicate error could abort the whole run.

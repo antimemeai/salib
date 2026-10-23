@@ -14,4 +14,10 @@ for script in verify/sage/*.sage; do
     echo "== $script"
     "$SAGE" "$script"
 done
-git diff --exit-code -- 'crates/*/tests/oracles/' || { echo "generated oracles changed; review and commit" >&2; exit 1; }
+# Compare against HEAD, including untracked oracle files.
+oracles=':(glob)crates/*/tests/oracles/**'
+if [ -n "$(git status --porcelain --untracked-files=all -- "$oracles")" ]; then
+    git status --short --untracked-files=all -- "$oracles" >&2
+    echo "generated oracles differ from HEAD; review and commit" >&2
+    exit 1
+fi

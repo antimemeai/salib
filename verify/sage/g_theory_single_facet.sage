@@ -23,11 +23,11 @@ def f64_bits(q):
     return "f64::from_bits(0x%016x)" % int(struct.unpack('<Q', struct.pack('<d', float(R53(q))))[0])
 
 cases = []
-set_random_seed(20261023)
-for shape in [(3, 2, 2), (2, 3, 2), (2, 2, 3), (3, 3, 2)]:
+for shape in [(3, 2, 2), (2, 3, 2), (2, 2, 3), (3, 3, 2), (4, 2, 2)]:
     sizes = dict(zip(FACETS, shape))
     cells = list(itertools.product(*[range(n) for n in shape]))
-    y = {c: QQ(ZZ.random_element(0, 10)) for c in cells}
+    # Fixed nonadditive integer data, independent of any random generator.
+    y = {c: QQ((3 * c[0] + 5 * c[1] + 7 * c[2] + 2 * c[0] * c[1] + c[1] * c[2] * c[0]) % 10) for c in cells}
     base = estimate(y, FACETS, sizes)
     for facet in FACETS:
         reps = [estimate(apply_resample(y, FACETS, sizes, facet, d), FACETS, sizes, boot=(facet,))

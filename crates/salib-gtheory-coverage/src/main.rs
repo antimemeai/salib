@@ -11,11 +11,12 @@
 
 use std::error::Error;
 use std::fmt::Write as _;
+use std::io::Write as _;
 use std::thread;
 
 use ndarray::Array3;
 use rand::RngCore;
-use salib_core::{Distribution, RngState};
+use salib_core::RngState;
 use salib_estimators::{bootstrap_g_theory_pir, estimate_g_theory_pir, GTheoryDesign};
 use statrs::distribution::{ChiSquared, ContinuousCDF};
 
@@ -143,17 +144,22 @@ fn open_unit(rng: &mut impl RngCore) -> f64 {
     ((rng.next_u64() >> 11) as f64 + 0.5) / (1_u64 << 53) as f64
 }
 
+/// Standard normal by Box–Muller: deliberately different machinery from
+/// salib's inverse-CDF generator.
+fn standard_normal(rng: &mut impl RngCore) -> f64 {
+    let (u1, u2) = (open_unit(rng), open_unit(rng));
+    (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
+}
+
 fn generate(cell: &Cell, rng: &mut impl RngCore) -> Array3<f64> {
     let [np, ni, nr] = cell.sizes;
-    let normal = Distribution::Normal {
-        mu: 0.0,
-        sigma: 1.0,
-    };
+    // Effects in (p, i, r, pi, pr, ir, pir) order; each interaction array is
+    // row-major over its own indices.
     let lens = [np, ni, nr, np * ni, np * nr, ni * nr, np * ni * nr];
     let effects: Vec<Vec<f64>> = (0..7)
         .map(|k| {
             (0..lens[k])
-                .map(|_| cell.theta[k].sqrt() * normal.quantile(open_unit(rng)))
+                .map(|_| cell.theta[k].sqrt() * standard_normal(rng))
                 .collect()
         })
         .collect();
@@ -221,9 +227,28 @@ fn satterthwaite(c: &[f64; 7], s: [usize; 3]) -> [Option<(f64, f64)>; 7] {
         }
         let nu = 2.0 * c[k] * c[k] / var;
         let chi = ChiSquared::new(nu).ok()?;
+        // statrs' inverse_cdf returns NaN for nu <= 1; bisect its cdf instead.
         let q = |prob: f64| {
-            let q = chi.inverse_cdf(prob);
-            (q.is_finite() && q > 0.0 && (chi.cdf(q) - prob).abs() <= 1e-9).then_some(q)
+            let (mut lo, mut hi) = (0.0_f64, 1.0_f64);
+            while chi.cdf(hi) < prob {
+                lo = hi;
+                hi *= 2.0;
+                if !hi.is_finite() {
+                    return None;
+                }
+            }
+            for _ in 0..2000 {
+                let mid = 0.5 * (lo + hi);
+                if mid <= lo || mid >= hi {
+                    break;
+                }
+                if chi.cdf(mid) < prob {
+                    lo = mid
+                } else {
+                    hi = mid
+                }
+            }
+            (hi > 0.0).then_some(hi)
         };
         Some((
             c[k] * nu / q(1.0 - ALPHA / 2.0)?,
@@ -296,6 +321,8 @@ fn baseline(y: &Array3<f64>, b: usize, rng: &mut impl RngCore) -> Baseline {
 
 #[derive(Default, Clone)]
 struct Rep {
+    /// The replicate raised an error; its intervals count as misses.
+    error: bool,
     fitted: bool,
     est: [f64; 7],
     se: [Option<f64>; 7],
@@ -310,18 +337,20 @@ struct Rep {
     failures: usize,
 }
 
-fn replicate(
-    cell: &Cell,
-    id: usize,
-    rep: usize,
-    b: usize,
-) -> Result<Rep, Box<dyn Error + Send + Sync>> {
+fn replicate(cell: &Cell, rep: usize, b: usize) -> Result<Rep, Box<dyn Error + Send + Sync>> {
     let root = RngState::from_seed(
         *b"salib-gtheory-coverage/2026-10-23"[..32]
             .first_chunk::<32>()
             .ok_or("seed")?,
     );
-    let salt = |what: &str| format!("cell{id}/rep{rep}/{what}");
+    let data = if cell.data == Data::Normal {
+        "normal"
+    } else {
+        "binary"
+    };
+    let [np, ni, nr] = cell.sizes;
+    let key = format!("{np}x{ni}x{nr}/{}/{data}", cell.pattern);
+    let salt = |what: &str| format!("{key}/rep{rep}/{what}");
     let y = generate(cell, &mut root.fork(salt("data").as_bytes()).into_chacha());
     let Ok(point) = estimate_g_theory_pir(y.view(), GTheoryDesign::Crossed) else {
         return Ok(Rep::default());
@@ -339,6 +368,7 @@ fn replicate(
         )
     });
     Ok(Rep {
+        error: false,
         fitted: true,
         est: point.components(),
         se: boot.component_se,
@@ -438,7 +468,7 @@ fn report_cell(out: &mut String, cell: &Cell, reps: &[Rep]) {
     let t = truth(cell);
     let (gt, phit) = coefficients(&t, cell.sizes[1] as f64, cell.sizes[2] as f64);
     let fitted: Vec<&Rep> = reps.iter().filter(|r| r.fitted).collect();
-    let unfit = reps.len() - fitted.len();
+    let unfit = reps.iter().filter(|r| !r.fitted && !r.error).count();
     let failures: usize = reps.iter().map(|r| r.failures).sum();
     for k in 0..7 {
         let est: Vec<f64> = fitted.iter().map(|r| r.est[k]).collect();
@@ -447,10 +477,12 @@ fn report_cell(out: &mut String, cell: &Cell, reps: &[Rep]) {
             / (est.len().max(2) - 1) as f64)
             .sqrt();
         let ses: Vec<f64> = fitted.iter().filter_map(|r| r.se[k]).collect();
-        let se_ratio = ses.iter().sum::<f64>() / ses.len().max(1) as f64 / sd;
+        // Morris et al. (2019): sqrt(mean SE²) over the empirical SD.
+        let se_ratio =
+            (ses.iter().map(|v| v * v).sum::<f64>() / ses.len().max(1) as f64).sqrt() / sd;
         let points: Vec<Option<f64>> = reps.iter().map(|r| r.fitted.then_some(r.est[k])).collect();
         let pick = |f: &dyn Fn(&Rep) -> Option<(f64, f64)>| reps.iter().map(f).collect::<Vec<_>>();
-        let extra = format!("SE ratio {se_ratio:.3}");
+        let extra = format!("facet-SE ratio {se_ratio:.3}");
         row(
             out,
             cell,
@@ -488,7 +520,8 @@ fn report_cell(out: &mut String, cell: &Cell, reps: &[Rep]) {
     let g_points: Vec<Option<f64>> = reps.iter().map(|r| r.g_clipped).collect();
     let phi_points: Vec<Option<f64>> = reps.iter().map(|r| r.phi_clipped).collect();
     let pick = |f: &dyn Fn(&Rep) -> Option<(f64, f64)>| reps.iter().map(f).collect::<Vec<_>>();
-    let extra = format!("unfit {unfit}, failed fits {failures}");
+    let errors = reps.iter().filter(|r| r.error).count();
+    let extra = format!("unfit {unfit}, errors {errors}, failed fits {failures}");
     row(
         out,
         cell,
@@ -540,7 +573,7 @@ fn report_cell(out: &mut String, cell: &Cell, reps: &[Rep]) {
 
 fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let args: Vec<String> = std::env::args().collect();
-    let usage = "usage: salib-gtheory-coverage <smoke|full> <n_sim> <B> <out.md> [threads]";
+    let usage = "usage: salib-gtheory-coverage <smoke|full> <n_sim> <B> <out.md> [threads] [first_cell] [end_cell]";
     if args.len() < 5 {
         return Err(usage.into());
     }
@@ -555,23 +588,32 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         Some(t) => t.parse()?,
         None => thread::available_parallelism().map_or(1, usize::from),
     };
-    let mut out = String::new();
+    let all = cells(full);
+    let first: usize = args.get(6).map_or(Ok(0), |v| v.parse())?;
+    let end: usize = args
+        .get(7)
+        .map_or(Ok(all.len()), |v| v.parse())?
+        .min(all.len());
+    let mut file = std::fs::File::create(&args[4])?;
+    let mut header = String::new();
     let _ = writeln!(
-        out,
-        "# G-theory coverage study ({})\n",
+        header,
+        "# G-theory coverage study ({}), cells {first}..{end} of {}\n",
         if full {
             "full"
         } else {
             "smoke: harness check only, not evidence"
-        }
+        },
+        all.len()
     );
-    let _ = writeln!(out, "n_sim = {n_sim}, B = {b}, nominal {:.2}. Pass: coverage in [.94, .96] and each tail miss in [.015, .035]; a None interval counts as a miss. Lower miss: the interval lies entirely below the truth; upper miss: entirely above. Conditional coverage counts available intervals only; bias-eliminated coverage targets the mean point estimate.\n", 1.0 - ALPHA);
-    let _ = writeln!(out, "| cell | pattern | data | estimand | method | truth | avail | coverage (MCSE) | lower miss | upper miss | conditional | bias-elim | mean width | notes | verdict |");
+    let _ = writeln!(header, "n_sim = {n_sim}, B = {b}, nominal {:.2}. Pass: coverage in [.94, .96] and each tail miss in [.015, .035]; a None interval counts as a miss. Lower miss: the interval lies entirely below the truth; upper miss: entirely above. Conditional coverage counts available intervals only; bias-eliminated coverage targets the mean point estimate.\n", 1.0 - ALPHA);
+    let _ = writeln!(header, "| cell | pattern | data | estimand | method | truth | avail | coverage (MCSE) | lower miss | upper miss | conditional | bias-elim | mean width | notes | verdict |");
     let _ = writeln!(
-        out,
+        header,
         "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
     );
-    for (id, cell) in cells(full).iter().enumerate() {
+    file.write_all(header.as_bytes())?;
+    for (id, cell) in all.iter().enumerate().take(end).skip(first) {
         let started = std::time::Instant::now();
         let chunks: Vec<Vec<Rep>> = thread::scope(|scope| {
             let handles: Vec<_> = (0..threads)
@@ -579,18 +621,29 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     scope.spawn(move || {
                         (t..n_sim)
                             .step_by(threads)
-                            .map(|rep| replicate(cell, id, rep, b))
-                            .collect::<Result<Vec<_>, _>>()
+                            .map(|rep| {
+                                replicate(cell, rep, b).unwrap_or_else(|e| {
+                                    eprintln!("cell {id} rep {rep}: {e}");
+                                    Rep {
+                                        error: true,
+                                        ..Rep::default()
+                                    }
+                                })
+                            })
+                            .collect::<Vec<_>>()
                     })
                 })
                 .collect();
             handles
                 .into_iter()
-                .map(|h| h.join().map_err(|_| "worker panicked")?)
+                .map(|h| h.join().map_err(|_| "worker panicked"))
                 .collect::<Result<Vec<_>, _>>()
         })?;
         let reps: Vec<Rep> = chunks.into_iter().flatten().collect();
-        report_cell(&mut out, cell, &reps);
+        let mut rows = String::new();
+        report_cell(&mut rows, cell, &reps);
+        file.write_all(rows.as_bytes())?;
+        file.flush()?;
         eprintln!(
             "cell {id} {:?} {} done in {:.1}s",
             cell.sizes,
@@ -598,6 +651,5 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             started.elapsed().as_secs_f64()
         );
     }
-    std::fs::write(&args[4], out)?;
     Ok(())
 }

@@ -22,9 +22,10 @@
 //! result, without these checks. Projection re-evaluates the coefficients
 //! from whatever components it is given.
 //!
-//! [`bootstrap_g_theory_pir`] implements only the plain resampling plan
-//! described on that function. Its replicate distribution is biased for
-//! crossed designs. [crolib](https://github.com/antimemeai/crolib) develops
+//! [`bootstrap_g_theory_pir`] reports Tong & Brennan component standard errors
+//! with Brennan's exact bias correction, parametric-bootstrap intervals for
+//! the components and Phi, and a closed-form F interval for G. Their
+//! calibration is established only where salib's coverage study says so. [crolib](https://github.com/antimemeai/crolib) develops
 //! G-theory beyond this module: designs, fitting, uncertainty and allocation.
 
 #![allow(
@@ -848,8 +849,8 @@ impl ParametricGenerator {
 /// `ν̂ = L²/(MS_pi²/df_pi + MS_pr²/df_pr + MS_pir²/df_pir)` (Satterthwaite).
 /// This generalizes Feldt's p × i interval. The identity and `ν̂` are checked
 /// symbolically in `verify/sage/g_theory_f_interval.sage`; the F law is an
-/// approximation. Unavailable when `L ≤ 0`, when `ν̂ < 0.5`, or when an F
-/// quantile does not reproduce its probability. The lower bound is clipped at 0.
+/// approximation. Unavailable when `L ≤ 0` or `ν̂ < 0.5`. Both bounds are
+/// clipped to `[0, 1]`, so a near-zero Ĝ can give `(0, 0)`.
 fn g_f_interval(components: [f64; 7], sizes: [usize; 3], alpha: f64) -> Option<(f64, f64)> {
     let [p, _, _, pi, pr, _, pir] = components;
     let (np, ni, nr) = (sizes[0] as f64, sizes[1] as f64, sizes[2] as f64);
@@ -870,16 +871,53 @@ fn g_f_interval(components: [f64; 7], sizes: [usize; 3], alpha: f64) -> Option<(
         return None;
     }
     let f = FisherSnedecor::new(nu, np - 1.0).ok()?;
-    let quantile = |prob: f64| {
-        let q = f.inverse_cdf(prob);
-        (q.is_finite() && q > 0.0 && (f.cdf(q) - prob).abs() <= 1e-9).then_some(q)
-    };
-    let (q_low, q_high) = (quantile(alpha / 2.0)?, quantile(1.0 - alpha / 2.0)?);
+    let (q_low, q_high) = (
+        quantile_by_bisection(|x| f.cdf(x), alpha / 2.0)?,
+        quantile_by_bisection(|x| f.cdf(x), 1.0 - alpha / 2.0)?,
+    );
     let one_minus_g = l / ms_p;
     Some((
         (1.0 - one_minus_g / q_low).max(0.0),
-        1.0 - one_minus_g / q_high,
+        (1.0 - one_minus_g / q_high).max(0.0),
     ))
+}
+
+/// The `prob` quantile of a continuous distribution on `(0, ∞)`, by
+/// bisection on its cdf. statrs' own `inverse_cdf` is wrong for F and χ² at
+/// small degrees of freedom; its cdf is reliable there. `None` if the cdf
+/// returns a nonfinite value or the quantile lies outside `(0, 1e300)`.
+fn quantile_by_bisection(cdf: impl Fn(f64) -> f64, prob: f64) -> Option<f64> {
+    let (mut low, mut high) = (0.0_f64, 1.0_f64);
+    loop {
+        let c = cdf(high);
+        if !c.is_finite() {
+            return None;
+        }
+        if c >= prob {
+            break;
+        }
+        low = high;
+        high *= 2.0;
+        if high > 1e300 {
+            return None;
+        }
+    }
+    for _ in 0..2000 {
+        let mid = 0.5 * (low + high);
+        if mid <= low || mid >= high {
+            break;
+        }
+        let c = cdf(mid);
+        if !c.is_finite() {
+            return None;
+        }
+        if c < prob {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    (high > 0.0).then_some(high)
 }
 
 /// Results of [`bootstrap_g_theory_pir`].
@@ -972,9 +1010,13 @@ pub fn bootstrap_g_theory_pir(
         ));
     }
     let sizes = [grid.shape()[0], grid.shape()[1], grid.shape()[2]];
+    // Each call consumes one parent word as a nonce, before any error return,
+    // so a retry after a failure draws fresh streams.
     let mut parent = rng.clone().into_chacha();
     let nonce = parent.next_u64().to_le_bytes();
-    let child = |name: &[u8]| rng.fork(&[name, &nonce].concat()).into_chacha();
+    let base = rng.clone();
+    *rng = RngState::snapshot(&parent, rng);
+    let child = |name: &[u8]| base.fork(&[name, &nonce].concat()).into_chacha();
 
     // Component standard errors: one corrected single-facet stream per facet.
     let plan = g_theory_resampling_plan(sizes);
@@ -1049,7 +1091,6 @@ pub fn bootstrap_g_theory_pir(
     if parametric_skipped == n_resamples {
         return Err(GTheoryBootstrapError::AllResamplesFailed);
     }
-    *rng = RngState::snapshot(&parent, rng);
     Ok(GTheoryBootstrap {
         plan,
         component_se,
@@ -1522,6 +1563,31 @@ mod tests {
         }
     }
 
+    mod sage_f_oracle {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/oracles/g_theory_f_interval.rs"
+        ));
+    }
+
+    /// Pinned against 50-digit F quantiles computed in Sage. Catches a swapped
+    /// degrees-of-freedom pair or a wrong quantile; statrs' cdf is accurate to
+    /// about 1e-12, which bounds the error of the bisected quantiles.
+    #[test]
+    fn f_interval_matches_high_precision_oracle() {
+        for case in sage_f_oracle::F_INTERVAL_CASES {
+            let got = g_f_interval(case.components, case.sizes, case.alpha).unwrap();
+            for (a, b) in [(got.0, case.interval.0), (got.1, case.interval.1)] {
+                assert!(
+                    (a - b).abs() <= 1e-9,
+                    "{:?}: got {got:?}, exact {:?}",
+                    case.sizes,
+                    case.interval
+                );
+            }
+        }
+    }
+
     #[test]
     fn resampling_plan_follows_tong_brennan_rules() {
         use GTheoryFacet::{I, P, R};
@@ -1569,6 +1635,13 @@ mod tests {
         // A tiny person component pushes the lower bound below 0, where it is clipped.
         let low = g_f_interval([0.001, 0.1, 0.1, 1.0, 1.0, 0.1, 1.0], [20, 5, 2], 0.05).unwrap();
         assert_eq!(low.0, 0.0);
+        // With no person variance both raw bounds can fall below 0; clipping
+        // keeps the interval ordered within [0, 1].
+        let zero = g_f_interval([0.0, 0.1, 0.1, 1.0, 1.0, 0.1, 1.0], [20, 5, 2], 0.05).unwrap();
+        assert!(
+            0.0 <= zero.0 && zero.0 <= zero.1 && zero.1 <= 1.0,
+            "{zero:?}"
+        );
     }
 
     /// The parametric generator's mean squares have the balanced normal-theory
