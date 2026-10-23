@@ -852,6 +852,23 @@ impl ParametricGenerator {
 /// approximation. Unavailable when `L ≤ 0` or `ν̂ < 0.5`. Both bounds are
 /// clipped to `[0, 1]`, so a near-zero Ĝ can give `(0, 0)`.
 fn g_f_interval(components: [f64; 7], sizes: [usize; 3], alpha: f64) -> Option<(f64, f64)> {
+    let (one_minus_g, nu) = g_f_parameters(components, sizes)?;
+    if nu < 0.5 {
+        return None;
+    }
+    let f = FisherSnedecor::new(nu, sizes[0] as f64 - 1.0).ok()?;
+    let (q_low, q_high) = (
+        quantile_by_bisection(|x| f.cdf(x), alpha / 2.0)?,
+        quantile_by_bisection(|x| f.cdf(x), 1.0 - alpha / 2.0)?,
+    );
+    Some((
+        (1.0 - one_minus_g / q_low).max(0.0),
+        (1.0 - one_minus_g / q_high).max(0.0),
+    ))
+}
+
+/// `(1 − Ĝ, ν̂)` for [`g_f_interval`], or `None` when `L ≤ 0`.
+fn g_f_parameters(components: [f64; 7], sizes: [usize; 3]) -> Option<(f64, f64)> {
     let [p, _, _, pi, pr, _, pir] = components;
     let (np, ni, nr) = (sizes[0] as f64, sizes[1] as f64, sizes[2] as f64);
     // Mean squares, recovered exactly from the expected-mean-square equations.
@@ -867,19 +884,7 @@ fn g_f_interval(components: [f64; 7], sizes: [usize; 3], alpha: f64) -> Option<(
     let df_pr = (np - 1.0) * (nr - 1.0);
     let df_pir = df_pi * (nr - 1.0);
     let nu = l * l / (ms_pi * ms_pi / df_pi + ms_pr * ms_pr / df_pr + ms_pir * ms_pir / df_pir);
-    if nu.is_nan() || nu < 0.5 {
-        return None;
-    }
-    let f = FisherSnedecor::new(nu, np - 1.0).ok()?;
-    let (q_low, q_high) = (
-        quantile_by_bisection(|x| f.cdf(x), alpha / 2.0)?,
-        quantile_by_bisection(|x| f.cdf(x), 1.0 - alpha / 2.0)?,
-    );
-    let one_minus_g = l / ms_p;
-    Some((
-        (1.0 - one_minus_g / q_low).max(0.0),
-        (1.0 - one_minus_g / q_high).max(0.0),
-    ))
+    (nu.is_finite() && nu > 0.0).then_some((l / ms_p, nu))
 }
 
 /// The `prob` quantile of a continuous distribution on `(0, ∞)`, by
@@ -1576,6 +1581,13 @@ mod tests {
     #[test]
     fn f_interval_matches_high_precision_oracle() {
         for case in sage_f_oracle::F_INTERVAL_CASES {
+            let (_, nu) = g_f_parameters(case.components, case.sizes).unwrap();
+            assert!(
+                (nu - case.nu).abs() <= 1e-12 * case.nu,
+                "{:?}: nu {nu} vs {}",
+                case.sizes,
+                case.nu
+            );
             let got = g_f_interval(case.components, case.sizes, case.alpha).unwrap();
             for (a, b) in [(got.0, case.interval.0), (got.1, case.interval.1)] {
                 assert!(
