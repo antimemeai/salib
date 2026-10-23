@@ -146,19 +146,29 @@ let projected = project_g_theory_d_study(&result.with_negative_components_zeroed
 println!("G = {:?}, Phi = {:?}", projected.g_coefficient, projected.phi_coefficient);
 ```
 
-Bootstrap intervals:
+Standard errors and intervals:
 
 ```rust
 use salib::estimators::{estimate_g_theory_pir_with_bootstrap, GTheoryDesign};
 use salib::RngState;
 
+// 1000 draws in each of four streams: 4000 refits in all.
 let mut rng = RngState::from_seed([0u8; 32]);
 let result = estimate_g_theory_pir_with_bootstrap(
-    grid.view(), GTheoryDesign::Crossed, 2000, 0.05, &mut rng
+    grid.view(), GTheoryDesign::Crossed, 1000, 0.05, &mut rng
 ).unwrap();
+let boot = result.bootstrap.as_ref().unwrap();
+println!("SE(p) = {:?}, G in {:?}", boot.component_se[0], result.g_coefficient_interval());
 ```
 
-The bootstrap resamples persons, items and raters independently with replacement and applies no bias correction. In a 20 × 8 × 4 simulation with every true component equal to 1, its replicates averaged +0.33 above the estimate for $\sigma^2_p$ and −0.38 below it for $\sigma^2_{pir}$, and a facet with only two levels is collapsed in about half the resamples. Treat its intervals as descriptive, not as calibrated confidence intervals. Replicate coefficients use the clipped estimator. A replicate on which a quantity is undefined is not dropped: the reported bounds hold for any value it could have taken, and are omitted when such replicates reach the tail fraction. See [salib #5](https://github.com/antimemeai/salib/issues/5).
+Each quantity uses the procedure the evidence supports (salib #5):
+
+- **Component standard errors** follow Tong & Brennan's single-facet plans. Each component is resampled on its own facet, or for an interaction on its largest facet, and each replicate is corrected with Brennan's (2006) CASMA 21 formula. The corrected replicates then centre exactly on the estimate, conditional on the data; Sage enumeration of every resample confirms this. The resampling-all-facets plan of salib 0.3.0 was biased: in a 20 × 8 × 4 simulation with all components 1, replicates sat +0.33 above the estimate for $\sigma^2_p$ and −0.38 below it for $\sigma^2_{pir}$. Even after correction, its standard errors were 2–30× too large.
+- **Component intervals** use a parametric bootstrap. The point estimate, with negatives zeroed, generates normal data at the grid's counts, and the interval is the percentile range of the refitted signed estimates.
+- **The G interval** is closed form: $(1-\hat G)/(1-G) \approx F(\hat\nu, n_p - 1)$, with a Satterthwaite $\hat\nu$. It holds at the G-study counts only and is clipped to $[0, 1]$.
+- **The Phi interval** is a parametric-bootstrap percentile interval for the clipped Phi. It is attached to a result only when that result's Phi is available.
+
+A failed replicate is not dropped: each bound holds for any value it could have taken, and it is omitted when failures reach the tail fraction. Calibration is claimed only for the cells of the coverage study in `papers/` (see "G-theory coverage study"). Non-normal data, near-zero components, facets with two or three levels, D-study counts and finite universes are not established. For those, see [crolib](https://github.com/antimemeai/crolib).
 
 Use a D-study to estimate how reliability would change with more or fewer
 items and raters, using variance components from an existing G-study.

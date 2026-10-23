@@ -12,9 +12,9 @@ mod g_theory_fixtures;
 use g_theory_fixtures::gate1;
 use salib_core::RngState;
 use salib_estimators::{
-    bootstrap_g_theory_pir, estimate_g_theory_pir, estimate_g_theory_pir_with_bootstrap,
-    find_minimum_design, project_g_theory_d_study, GTheoryCoefficientError, GTheoryComponent,
-    GTheoryDesign, GTheoryError,
+    estimate_g_theory_pir, estimate_g_theory_pir_with_bootstrap, find_minimum_design,
+    project_g_theory_d_study, GTheoryCoefficientError, GTheoryComponent, GTheoryDesign,
+    GTheoryError,
 };
 
 const TOL: f64 = 1e-12;
@@ -90,7 +90,7 @@ fn design_search_refuses_signed_components_and_accepts_zeroed() {
 }
 
 #[test]
-fn bootstrap_withholds_interval_for_unavailable_coefficient() {
+fn bootstrap_attachment_follows_the_estimator() {
     let mut rng = RngState::from_seed([0x44; 32]);
     let r = estimate_g_theory_pir_with_bootstrap(
         gate1().view(),
@@ -100,36 +100,19 @@ fn bootstrap_withholds_interval_for_unavailable_coefficient() {
         &mut rng,
     )
     .unwrap();
+    let boot = r.bootstrap.as_ref().unwrap();
+    // The signed Phi is unavailable, so its interval is withheld here...
     assert_eq!(r.phi_coefficient, Err(NEGATIVE_R));
-    assert_eq!(
-        (r.phi_coefficient_ci_low, r.phi_coefficient_ci_high),
-        (None, None)
-    );
-    let (low, high) = (
-        r.g_coefficient_ci_low.unwrap(),
-        r.g_coefficient_ci_high.unwrap(),
-    );
-    assert!((0.0..=1.0).contains(&low) && low <= high && high <= 1.0);
-    let fitted = 200 - r.bootstrap_skipped.unwrap();
-    assert!(r.g_coefficient_failed.unwrap() <= fitted);
-    assert!(r.phi_coefficient_failed.unwrap() <= fitted);
-
+    assert_eq!(r.phi_coefficient_interval(), None);
+    assert!(boot.phi_coefficient_ci.is_some());
+    // ...and attached to the zeroed copy, whose Phi = 243/301 it describes.
     let zeroed = r.with_negative_components_zeroed();
-    assert_eq!(zeroed.bootstrap_iterations, None);
-    assert_eq!(zeroed.g_coefficient_ci_low, None);
-
-    // The resampled estimator is the clipped one; its Phi interval is exposed
-    // directly and brackets the zeroed point Phi = 243/301.
-    let mut rng = RngState::from_seed([0x44; 32]);
-    let boot =
-        bootstrap_g_theory_pir(gate1().view(), GTheoryDesign::Crossed, 200, 0.1, &mut rng).unwrap();
-    let (low, high) = boot.phi_coefficient_ci.unwrap();
+    let (low, high) = zeroed.phi_coefficient_interval().unwrap();
     assert!(low <= 243.0 / 301.0 && 243.0 / 301.0 <= high);
-    assert_eq!(
-        boot.g_coefficient_ci,
-        Some((
-            r.g_coefficient_ci_low.unwrap(),
-            r.g_coefficient_ci_high.unwrap()
-        ))
-    );
+    // The F interval for G depends only on the signed mean squares: both carry it.
+    assert!(r.g_coefficient_interval().is_some());
+    assert_eq!(zeroed.g_coefficient_interval(), r.g_coefficient_interval());
+    // Standard errors describe the signed estimates only.
+    assert!(boot.component_se.iter().all(Option::is_some));
+    assert_eq!(zeroed.bootstrap.as_ref().unwrap().component_se, [None; 7]);
 }

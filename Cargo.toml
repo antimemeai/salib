@@ -5,6 +5,7 @@ members = [
     "crates/salib-cli",
     "crates/salib-core",
     "crates/salib-estimators",
+    "crates/salib-gtheory-coverage",
     "crates/salib-models",
     "crates/salib-samplers",
     "crates/salib-shapley",
