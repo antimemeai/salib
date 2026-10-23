@@ -38,12 +38,17 @@ fn increasing_items_and_raters_improves_reliability() {
     assert_eq!(points.len(), 4);
     for (point, &(items, raters)) in points.iter().zip(&counts) {
         assert_eq!((point.n_items, point.n_raters), (items, raters));
-        assert!(point.g_coefficient.is_finite() && point.phi_coefficient.is_finite());
     }
-    let current = &points[0];
-    let expanded = &points[3];
-    assert!(expanded.g_coefficient > current.g_coefficient);
-    assert!(expanded.phi_coefficient > current.phi_coefficient);
-    assert!(current.g_coefficient > current.phi_coefficient);
-    assert!(expanded.g_coefficient > expanded.phi_coefficient);
+    let coefficients = |k: usize| {
+        (
+            points[k].g_coefficient.unwrap(),
+            points[k].phi_coefficient.unwrap(),
+        )
+    };
+    let (current_g, current_phi) = coefficients(0);
+    let (expanded_g, expanded_phi) = coefficients(3);
+    assert!(expanded_g > current_g);
+    assert!(expanded_phi > current_phi);
+    assert!(current_g > current_phi);
+    assert!(expanded_g > expanded_phi);
 }

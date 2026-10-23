@@ -52,7 +52,8 @@ pub use fractional_factorial::{estimate_fractional_factorial, FractionalFactoria
 pub use g_theory::{
     bootstrap_g_theory_pir, d_study_surface, estimate_g_theory_pir,
     estimate_g_theory_pir_with_bootstrap, find_minimum_design, project_g_theory_d_study,
-    DStudyPoint, DStudySurface, GTheoryBootstrapError, GTheoryDesign, GTheoryError, GTheoryResult,
+    DStudyPoint, DStudySurface, GTheoryBootstrap, GTheoryBootstrapError, GTheoryCoefficient,
+    GTheoryCoefficientError, GTheoryComponent, GTheoryDesign, GTheoryError, GTheoryResult,
 };
 pub use given_data_sobol::{estimate_given_data_sobol, GivenDataSobolError, GivenDataSobolIndices};
 #[cfg(feature = "surrogate")]

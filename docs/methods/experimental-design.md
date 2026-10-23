@@ -96,11 +96,11 @@ Generalizability theory extends classical reliability (Cronbach's alpha) to desi
 
 $$\sigma^2_{\text{total}} = \sigma^2_p + \sigma^2_i + \sigma^2_r + \sigma^2_{pi} + \sigma^2_{pr} + \sigma^2_{ir} + \sigma^2_{pir}$$
 
-Each component is estimated from the corresponding mean square via the standard EMS equations (Brennan 2001 Chapter 2). The two reliability coefficients are:
+Each component is estimated from the corresponding mean square via the standard expected-mean-square (EMS) equations (Brennan 2001). These moment estimates are unbiased but **signed**: in small samples a component can be estimated below zero. salib reports the signed values. The two reliability coefficients are:
 
 **Generalizability coefficient** (relative decisions):
 
-$$\rho^2 = \frac{\sigma^2_p}{\sigma^2_p + \sigma^2_\delta}$$
+$$E\rho^2 = \frac{\sigma^2_p}{\sigma^2_p + \sigma^2_\delta}$$
 
 where $\sigma^2_\delta = \sigma^2_{pi}/n_i + \sigma^2_{pr}/n_r + \sigma^2_{pir}/(n_i \cdot n_r)$ is the relative error variance.
 
@@ -108,9 +108,13 @@ where $\sigma^2_\delta = \sigma^2_{pi}/n_i + \sigma^2_{pr}/n_r + \sigma^2_{pir}/
 
 $$\Phi = \frac{\sigma^2_p}{\sigma^2_p + \sigma^2_\Delta}$$
 
-where $\sigma^2_\Delta$ includes all non-person variance components scaled by their facet sample sizes.
+where $\sigma^2_\Delta = \sigma^2_\delta + \sigma^2_i/n_i + \sigma^2_r/n_r + \sigma^2_{ir}/(n_i \cdot n_r)$ is the absolute error variance.
 
-The D-study projects $\rho^2$ and $\Phi$ to hypothetical designs with different numbers of items and raters — answering "how many raters/items do I need to reach $\rho^2 \geq 0.80$?"
+With nonnegative components, $0 \le \Phi \le E\rho^2 \le 1$. Substituting a negative estimate breaks this: one random 3 × 3 × 2 grid gives $E\rho^2 = -69$. salib therefore computes a coefficient only when every component it uses is nonnegative. Otherwise the coefficient is `Err(NegativeComponent { component })`, naming the first negative one. A coefficient whose numerator and denominator are both zero is `Err(ZeroDenominator)` rather than 0.
+
+Truncating negative estimates to zero is a common convention, but it is a different estimator: salib applies it only on request, through `with_negative_components_zeroed()`. That method clips each negative estimate after solving and leaves the others unchanged. It is not the Cronbach et al. (1972) procedure, which feeds the zeros back into the remaining equations, nor a constrained (e.g. REML) fit, which would reallocate the variance.
+
+The D-study projects $E\rho^2$ and $\Phi$ to hypothetical designs with different numbers of items and raters — answering "how many raters/items do I need to reach $E\rho^2 \geq 0.80$?"
 
 ### Code
 
@@ -120,11 +124,15 @@ use ndarray::Array3;
 
 // p x i x r balanced grid: 10 persons, 5 items, 3 raters
 let grid = Array3::<f64>::from_shape_fn((10, 5, 3), |(p, i, r)| {
-    50.0 + 6.0 * p as f64 + 2.0 * i as f64 + 0.5 * r as f64
+    50.0 + 6.0 * p as f64 + 2.0 * i as f64 + 0.5 * r as f64 + ((p * i + r) % 3) as f64
 });
 
 let result = estimate_g_theory_pir(grid.view(), GTheoryDesign::Crossed).unwrap();
 println!("{result}");
+match result.g_coefficient {
+    Ok(g) => println!("G = {g:.4}"),
+    Err(reason) => println!("G unavailable: {reason}"),
+}
 ```
 
 D-study projection:
@@ -132,12 +140,13 @@ D-study projection:
 ```rust
 use salib::estimators::project_g_theory_d_study;
 
-// What if we used 8 items and 4 raters instead?
-let projected = project_g_theory_d_study(&result, 8, 4).unwrap();
-println!("G = {:.4}, Phi = {:.4}", projected.g_coefficient, projected.phi_coefficient);
+// What if we used 8 items and 4 raters instead? Clip negatives first to
+// project under the truncation convention.
+let projected = project_g_theory_d_study(&result.with_negative_components_zeroed(), 8, 4).unwrap();
+println!("G = {:?}, Phi = {:?}", projected.g_coefficient, projected.phi_coefficient);
 ```
 
-Bootstrap confidence intervals:
+Bootstrap intervals:
 
 ```rust
 use salib::estimators::{estimate_g_theory_pir_with_bootstrap, GTheoryDesign};
@@ -149,6 +158,8 @@ let result = estimate_g_theory_pir_with_bootstrap(
 ).unwrap();
 ```
 
+The bootstrap resamples persons, items and raters independently with replacement and applies no bias correction. In a 20 × 8 × 4 simulation with every true component equal to 1, its replicates averaged +0.33 above the estimate for $\sigma^2_p$ and −0.38 below it for $\sigma^2_{pir}$, and a facet with only two levels is collapsed in about half the resamples. Treat its intervals as descriptive, not as calibrated confidence intervals. Replicate coefficients use the clipped estimator. A replicate on which a quantity is undefined is not dropped: the reported bounds hold for any value it could have taken, and are omitted when such replicates reach the tail fraction. See [salib #5](https://github.com/antimemeai/salib/issues/5).
+
 Use a D-study to estimate how reliability would change with more or fewer
 items and raters, using variance components from an existing G-study.
 
@@ -157,6 +168,8 @@ here treat items and raters as random facets and persons as the objects of
 measurement. Fixed facets require different error terms. D-study projections
 reuse the estimated variance components; they do not account for changes in
 the population or measurement process. See [Brennan's overview, §2](https://www.na-mic.org/w/img_auth.php/1/15/Generalizability_theory_and_example.pdf).
+For nested and mixed designs, fitted and supplied components, intervals with
+stated semantics and design allocation, see [crolib](https://github.com/antimemeai/crolib).
 
 ## Discrepancy
 

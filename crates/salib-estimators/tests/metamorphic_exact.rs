@@ -1055,8 +1055,8 @@ mod metamorphic_exact {
         same(&fractions(&a), &fractions(&b));
         scaled(&mean_squares(&a), &mean_squares(&b), 4.0);
         scaled(&components(&g), &components(&gg), 4.0);
-        close(g.g_coefficient, gg.g_coefficient);
-        close(g.phi_coefficient, gg.phi_coefficient);
+        close(g.g_coefficient.unwrap(), gg.g_coefficient.unwrap());
+        close(g.phi_coefficient.unwrap(), gg.phi_coefficient.unwrap());
         let yy = y
             .select(Axis(0), &[2, 0, 1])
             .select(Axis(1), &[1, 2, 0])
@@ -1066,8 +1066,8 @@ mod metamorphic_exact {
         same(&fractions(&a), &fractions(&b));
         same(&mean_squares(&a), &mean_squares(&b));
         same(&components(&g), &components(&gg));
-        close(g.g_coefficient, gg.g_coefficient);
-        close(g.phi_coefficient, gg.phi_coefficient);
+        close(g.g_coefficient.unwrap(), gg.g_coefficient.unwrap());
+        close(g.phi_coefficient.unwrap(), gg.phi_coefficient.unwrap());
         let yy = y.clone().permuted_axes([0, 2, 1]);
         let gg = estimate_g_theory_pir(yy.view(), GTheoryDesign::Crossed).unwrap();
         same(
@@ -1084,18 +1084,19 @@ mod metamorphic_exact {
         );
         let p = project_g_theory_d_study(&g, 4, 6).unwrap();
         let q = project_g_theory_d_study(&gg, 6, 4).unwrap();
-        close(p.g_coefficient, q.g_coefficient);
-        close(p.phi_coefficient, q.phi_coefficient);
-        let positive = GTheoryResult::from_components(10.0, 2.0, 1.0, 3.0, 2.0, 0.5, 1.0, 0.0, 0.0);
+        close(p.g_coefficient.unwrap(), q.g_coefficient.unwrap());
+        close(p.phi_coefficient.unwrap(), q.phi_coefficient.unwrap());
+        let positive =
+            GTheoryResult::from_components(10.0, 2.0, 1.0, 3.0, 2.0, 0.5, 1.0, 1, 1).unwrap();
         let mut prev = None;
         for (ni, nr) in [(2, 2), (4, 2), (4, 4), (8, 8)] {
             let p = project_g_theory_d_study(&positive, ni, nr).unwrap();
-            bounded(p.phi_coefficient, 0.0, p.g_coefficient);
-            bounded(p.g_coefficient, 0.0, 1.0);
+            bounded(p.phi_coefficient.unwrap(), 0.0, p.g_coefficient.unwrap());
+            bounded(p.g_coefficient.unwrap(), 0.0, 1.0);
             if let Some((g, phi)) = prev {
-                assert!(p.g_coefficient >= g && p.phi_coefficient >= phi);
+                assert!(p.g_coefficient.unwrap() >= g && p.phi_coefficient.unwrap() >= phi);
             }
-            prev = Some((p.g_coefficient, p.phi_coefficient));
+            prev = Some((p.g_coefficient.unwrap(), p.phi_coefficient.unwrap()));
         }
         let y = grid(1.0);
         let a = estimate_anova_two_way(y.view()).unwrap();
