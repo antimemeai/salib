@@ -66,14 +66,20 @@ pub fn sobol_g(x: &[f64], a: &[f64]) -> f64 {
     prod
 }
 
-/// Closed-form first-order Sobol' indices for Sobol' G with the
-/// given `a` vector. Total-order indices are not yet computed; the
-/// `total_order` field is populated with `f64::NAN` per factor as
-/// a sentinel for "not derived in this PR."
+/// Closed-form first- and total-order Sobol' indices for Sobol' G with the
+/// given `a` vector.
+///
+/// Each factor has mean 1 and variance `V_i = (1/3)/(1 + a_i)²`, so the
+/// Hoeffding decomposition of the product gives `V_u = Π_{i∈u} V_i`:
+/// `D = Π(1 + V_i) − 1`, `S_i = V_i/D` and `S_Ti = V_i Π_{j≠i}(1 + V_j)/D`.
+/// The products are evaluated as `exp`/`expm1` of `Σ ln_1p(V_i)`, because
+/// `Π(1 + V_i) − 1` cancels badly when the `V_i` are small (large `a_i`).
+/// Checked against exact symbolic integration in
+/// `verify/sage/validation_analytic.sage`.
 ///
 /// # Panics
 ///
-/// On any `a_i < 0`.
+/// On an empty `a` or any `a_i < 0`.
 #[must_use]
 pub fn analytic_indices(a: &[f64]) -> SobolIndicesAnalytic {
     let d = a.len();
@@ -91,14 +97,15 @@ pub fn analytic_indices(a: &[f64]) -> SobolIndicesAnalytic {
         })
         .collect();
 
-    // Total variance D = Π_i (1 + V_i) - 1.
-    let total_variance: f64 = v.iter().fold(1.0_f64, |acc, vi| acc * (1.0 + vi)) - 1.0;
+    // log Π(1 + V_i), accumulated without forming the product.
+    let log_prod: f64 = v.iter().map(|vi| vi.ln_1p()).sum();
+    let total_variance = log_prod.exp_m1();
 
-    // First-order S_i = V_i / D.
     let first_order: Vec<f64> = v.iter().map(|vi| vi / total_variance).collect();
-
-    // Total-order: NOT computed in PR 4. Sentinel NaN.
-    let total_order: Vec<f64> = vec![f64::NAN; d];
+    let total_order: Vec<f64> = v
+        .iter()
+        .map(|vi| vi * (log_prod - vi.ln_1p()).exp() / total_variance)
+        .collect();
 
     SobolIndicesAnalytic::new(total_variance, first_order, total_order, None)
 }
@@ -235,15 +242,6 @@ mod tests {
         assert_eq!(s.dim(), 4);
         assert_eq!(s.first_order.len(), 4);
         assert_eq!(s.total_order.len(), 4);
-    }
-
-    #[test]
-    fn analytic_indices_total_order_is_nan_sentinel() {
-        // PR 4 doesn't compute total-order; sentinel is NaN.
-        let s = analytic_indices(&[1.0, 2.0]);
-        for v in &s.total_order {
-            assert!(v.is_nan(), "expected NaN sentinel, got {v}");
-        }
     }
 
     #[test]
