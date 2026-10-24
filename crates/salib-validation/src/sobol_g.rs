@@ -12,7 +12,7 @@
 //! - Canonical screening cases: `a = (0, 1, 4.5, 9, 99, 99, 99, 99)`
 //!   from Saltelli-Sobol 1995.
 //!
-//! # Closed-form first-order indices
+//! # Closed-form first- and total-order indices
 //!
 //! Per Saltelli-Sobol 1995:
 //!
@@ -21,12 +21,8 @@
 //! V_i  = (1/3) / (1 + a_i)²            (per-factor variance contribution)
 //! D    = Π_i (1 + V_i) - 1              (total variance, product form)
 //! S_i  = V_i / D                        (first-order Sobol' index)
+//! S_Ti = V_i Π_{j≠i} (1 + V_j) / D      (total-order Sobol' index)
 //! ```
-//!
-//! Total-order indices have a recursive product form (Saltelli-Sobol
-//! 1995, Eqs 22-24); deferred to a follow-on PR. Per
-//! § "What this
-//! gates — NOT gated."
 //!
 //! # Why the product form for D
 //!
@@ -66,14 +62,23 @@ pub fn sobol_g(x: &[f64], a: &[f64]) -> f64 {
     prod
 }
 
-/// Closed-form first-order Sobol' indices for Sobol' G with the
-/// given `a` vector. Total-order indices are not yet computed; the
-/// `total_order` field is populated with `f64::NAN` per factor as
-/// a sentinel for "not derived in this PR."
+/// Closed-form first- and total-order Sobol' indices for Sobol' G with the
+/// given `a` vector.
+///
+/// Each factor has mean 1 and variance `V_i = (1/3)/(1 + a_i)²`, so the
+/// Hoeffding decomposition of the product gives `V_u = Π_{i∈u} V_i`:
+/// `D = Π(1 + V_i) − 1`, `S_i = V_i/D` and `S_Ti = V_i Π_{j≠i}(1 + V_j)/D`.
+/// `D` is accumulated as `D ← D + V_k (1 + D)`, a sum of nonnegative terms,
+/// because `Π(1 + V_i) − 1` cancels when the `V_i` are small (large `a_i`);
+/// one factor gives `D = V_1` exactly. Checked against exact symbolic
+/// integration in `verify/sage/validation_analytic.sage`.
+///
+/// `V_i` underflows to 0 for `a_i` above about 1e162; if every factor does,
+/// `D = 0` and the indices are NaN.
 ///
 /// # Panics
 ///
-/// On any `a_i < 0`.
+/// On an empty `a` or any `a_i < 0`.
 #[must_use]
 pub fn analytic_indices(a: &[f64]) -> SobolIndicesAnalytic {
     let d = a.len();
@@ -82,23 +87,21 @@ pub fn analytic_indices(a: &[f64]) -> SobolIndicesAnalytic {
         assert!(*ai >= 0.0, "Sobol' G: a_i must be ≥ 0, got {ai}");
     }
 
-    // V_i = (1/3) / (1 + a_i)².
+    // V_i = (1/3) / (1 + a_i)², dividing twice to postpone overflow.
     let v: Vec<f64> = a
         .iter()
-        .map(|ai| {
-            let denom = 1.0 + ai;
-            (1.0 / 3.0) / (denom * denom)
-        })
+        .map(|ai| (1.0 / 3.0) / (1.0 + ai) / (1.0 + ai))
         .collect();
 
-    // Total variance D = Π_i (1 + V_i) - 1.
-    let total_variance: f64 = v.iter().fold(1.0_f64, |acc, vi| acc * (1.0 + vi)) - 1.0;
+    let total_variance = v.iter().fold(0.0_f64, |acc, vi| acc + vi * (1.0 + acc));
 
-    // First-order S_i = V_i / D.
     let first_order: Vec<f64> = v.iter().map(|vi| vi / total_variance).collect();
-
-    // Total-order: NOT computed in PR 4. Sentinel NaN.
-    let total_order: Vec<f64> = vec![f64::NAN; d];
+    let total_order: Vec<f64> = (0..d)
+        .map(|i| {
+            let others: f64 = (0..d).filter(|&j| j != i).map(|j| 1.0 + v[j]).product();
+            v[i] * others / total_variance
+        })
+        .collect();
 
     SobolIndicesAnalytic::new(total_variance, first_order, total_order, None)
 }
@@ -235,15 +238,6 @@ mod tests {
         assert_eq!(s.dim(), 4);
         assert_eq!(s.first_order.len(), 4);
         assert_eq!(s.total_order.len(), 4);
-    }
-
-    #[test]
-    fn analytic_indices_total_order_is_nan_sentinel() {
-        // PR 4 doesn't compute total-order; sentinel is NaN.
-        let s = analytic_indices(&[1.0, 2.0]);
-        for v in &s.total_order {
-            assert!(v.is_nan(), "expected NaN sentinel, got {v}");
-        }
     }
 
     #[test]
