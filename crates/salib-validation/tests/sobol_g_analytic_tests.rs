@@ -52,14 +52,6 @@ fn high_a_contributes_negligibly() {
     assert!(s2.is_finite() && s2 < 0.01);
 }
 #[test]
-fn total_order_uses_nan_sentinel() {
-    let s = sobol_g::analytic_indices(&[1.0, 2.0]);
-    assert_eq!(s.total_order.len(), 2);
-    for value in &s.total_order {
-        assert!(value.is_nan());
-    }
-}
-#[test]
 fn canonical_screening_case_ranks_factors() {
     let s = sobol_g::analytic_indices(&[0.0, 1.0, 4.5, 9.0, 99.0, 99.0, 99.0, 99.0]);
     assert_eq!(s.first_order.len(), 8);

@@ -9,7 +9,9 @@ export SALIB_ROOT="$PWD"
 export CROLIB="${CROLIB:-$PWD/../crolib}"
 SAGE="${SAGE:-/opt/homebrew/anaconda3/envs/sage/bin/sage}"
 [ -x "$SAGE" ] || { echo "sage not found at $SAGE; set SAGE (see verify/sage/environment.yml)" >&2; exit 1; }
-[ -f "$CROLIB/verify/sage/balanced.sage" ] || { echo "crolib Sage library not found; set CROLIB" >&2; exit 1; }
+if grep -q 'balanced.sage' verify/sage/*.sage 2>/dev/null; then
+    [ -f "$CROLIB/verify/sage/balanced.sage" ] || { echo "crolib Sage library not found; set CROLIB" >&2; exit 1; }
+fi
 for script in verify/sage/*.sage; do
     echo "== $script"
     "$SAGE" "$script"
