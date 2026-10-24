@@ -283,3 +283,19 @@ Fixed:
 A full study run was attempted on neuroses with the pre-review harness. The
 connection dropped during its build and it never started (see
 journal/2026-10-23-infra-block.md).
+
+## Study run 1 (neuroses)
+
+The run began at 610a9c7 and completed cells 0–42 (750 rows). It then
+aborted in cell 43 ([50, 8, 5] near-zero-rater): statrs' `Gamma::cdf`
+panics (`XInvalid`) when `x·rate` underflows to 0, and the harness's χ²
+bisection reached such an x for a tiny Satterthwaite ν. salib's library code
+does not call that function; its F bisection goes through statrs' beta,
+which accepts 0. Fixes:
+- the harness's χ² cdf returns 0 where x/2 underflows;
+- each replicate runs under `catch_unwind`, so a dependency panic is
+  recorded as that replicate's error.
+
+Cell 43 then reruns all 1900 replicates without error. The guard changes
+behavior only where the old code panicked, and seeds are keyed by cell, so
+cells 0–42 stand and the run resumes at cell 43.

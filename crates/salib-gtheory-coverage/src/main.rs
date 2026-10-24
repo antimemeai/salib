@@ -227,10 +227,13 @@ fn satterthwaite(c: &[f64; 7], s: [usize; 3]) -> [Option<(f64, f64)>; 7] {
         }
         let nu = 2.0 * c[k] * c[k] / var;
         let chi = ChiSquared::new(nu).ok()?;
+        // statrs' Gamma::cdf panics when x·rate (x/2 here) underflows to 0,
+        // which bisection reaches for tiny nu; the cdf is 0 there.
+        let cdf = |x: f64| if x * 0.5 > 0.0 { chi.cdf(x) } else { 0.0 };
         // statrs' inverse_cdf returns NaN for nu <= 1; bisect its cdf instead.
         let q = |prob: f64| {
             let (mut lo, mut hi) = (0.0_f64, 1.0_f64);
-            while chi.cdf(hi) < prob {
+            while cdf(hi) < prob {
                 lo = hi;
                 hi *= 2.0;
                 if !hi.is_finite() {
@@ -242,7 +245,7 @@ fn satterthwaite(c: &[f64; 7], s: [usize; 3]) -> [Option<(f64, f64)>; 7] {
                 if mid <= lo || mid >= hi {
                     break;
                 }
-                if chi.cdf(mid) < prob {
+                if cdf(mid) < prob {
                     lo = mid
                 } else {
                     hi = mid
@@ -622,13 +625,26 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                         (t..n_sim)
                             .step_by(threads)
                             .map(|rep| {
-                                replicate(cell, rep, b).unwrap_or_else(|e| {
-                                    eprintln!("cell {id} rep {rep}: {e}");
-                                    Rep {
-                                        error: true,
-                                        ..Rep::default()
+                                // A panic inside a dependency is recorded as this
+                                // replicate's error rather than ending the run.
+                                let run = std::panic::catch_unwind(|| replicate(cell, rep, b));
+                                match run {
+                                    Ok(Ok(r)) => r,
+                                    Ok(Err(e)) => {
+                                        eprintln!("cell {id} rep {rep}: {e}");
+                                        Rep {
+                                            error: true,
+                                            ..Rep::default()
+                                        }
                                     }
-                                })
+                                    Err(_) => {
+                                        eprintln!("cell {id} rep {rep}: panicked");
+                                        Rep {
+                                            error: true,
+                                            ..Rep::default()
+                                        }
+                                    }
+                                }
                             })
                             .collect::<Vec<_>>()
                     })
