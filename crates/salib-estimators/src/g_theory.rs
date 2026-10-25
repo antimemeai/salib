@@ -2235,7 +2235,8 @@ mod tests {
 
     /// Both closed-form intervals are scale-equivariant: multiplying every
     /// component by c multiplies each Satterthwaite bound by c and leaves the
-    /// G interval unchanged, across the whole normal range.
+    /// G interval unchanged, across the whole normal range. At 2^1022 the
+    /// mean squares would overflow without working at unit scale.
     #[test]
     fn closed_form_intervals_do_not_depend_on_units() {
         let base = [0.5528, 0.4417, 0.0074, 0.575, 0.1009, 0.1565, 0.9352];
@@ -2243,7 +2244,13 @@ mod tests {
         let unit_ci = satterthwaite_intervals(base, sizes, 0.05);
         let unit_g = g_f_interval(base, sizes, 0.05).unwrap();
         let close = |a: f64, b: f64| a == b || (a - b).abs() <= 1e-12 * b.abs();
-        for c in [1e-200, 1e200, 2.0_f64.powi(-900), 2.0_f64.powi(900)] {
+        for c in [
+            1e-200,
+            1e200,
+            2.0_f64.powi(-900),
+            2.0_f64.powi(900),
+            2.0_f64.powi(1022),
+        ] {
             let scaled = base.map(|v| v * c);
             for (k, (got, unit)) in satterthwaite_intervals(scaled, sizes, 0.05)
                 .iter()
@@ -2271,6 +2278,23 @@ mod tests {
             g_f_interval([-0.25, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], [5, 4, 3], 0.05),
             None
         );
+        // ν̂ = 1/(1 + 2/L²) at 2×2×2 with σ²(pr) = 0 and σ²(pir) = 1; this σ²(pi)
+        // gives exactly ν̂ = 0.5, the smallest accepted value.
+        let pi = f64::from_bits(0x3fca_8279_99fc_ef2b);
+        let at_edge = [1.0, 0.0, 0.0, pi, 0.0, 0.0, 1.0];
+        assert_eq!(g_f_parameters(at_edge, [2, 2, 2]).unwrap().1, 0.5);
+        assert!(g_f_interval(at_edge, [2, 2, 2], 0.05).is_some());
+        let below = [
+            1.0,
+            0.0,
+            0.0,
+            f64::from_bits(0x3fca_8279_99fc_ef2a),
+            0.0,
+            0.0,
+            1.0,
+        ];
+        assert!(g_f_parameters(below, [2, 2, 2]).unwrap().1 < 0.5);
+        assert_eq!(g_f_interval(below, [2, 2, 2], 0.05), None);
     }
 
     #[test]
