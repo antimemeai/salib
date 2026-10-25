@@ -149,3 +149,6 @@ Jiang et al. but undercovers at large n_p: as low as .69 with two or three
 raters, and ≤ .87 even with five at n_p = 200. A follow-up should
 propagate rater-component uncertainty, either with a nested bootstrap or a
 closed form analogous to G's F interval.
+
+**Superseded (salib #10).** The fiducial generalized pivotal quantity interval
+replaced the parametric bootstrap: `2026-10-25-phi-fiducial-interval.md`.

@@ -403,7 +403,6 @@ fn g_theory_result_roundtrip() {
                 "n_resamples": 999,
                 "alpha": 0.05,
                 "facet_skipped": [0, 0, 1],
-                "parametric_skipped": 0,
                 "phi_coefficient_failed": 3
             }
         }"#,

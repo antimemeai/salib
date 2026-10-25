@@ -24,7 +24,8 @@
 //!
 //! [`bootstrap_g_theory_pir`] reports Tong & Brennan component standard errors
 //! with Brennan's exact bias correction, Satterthwaite component intervals, a
-//! closed-form F interval for G and a parametric-bootstrap interval for Phi.
+//! closed-form F interval for G and a fiducial (generalized pivotal quantity)
+//! interval for Phi.
 //! Their calibration is established only where salib's coverage study says so. [crolib](https://github.com/antimemeai/crolib) develops
 //! G-theory beyond this module: designs, fitting, uncertainty and allocation.
 
@@ -804,53 +805,84 @@ fn open_unit(rng: &mut impl RngCore) -> f64 {
     ((rng.next_u64() >> 12) as f64 + 0.5) / (1_u64 << 52) as f64
 }
 
-/// Balanced normal random-effects arrays: seven independent effect arrays,
-/// each `N(0, σ²)` with the given standard deviations, summed per cell.
-struct ParametricGenerator {
-    sizes: [usize; 3],
-    effects: [Vec<f64>; 7],
-    normal: salib_core::Distribution,
+/// Standard normal deviate, by inverting the normal cdf.
+fn standard_normal(rng: &mut impl RngCore) -> f64 {
+    salib_core::Distribution::Normal {
+        mu: 0.0,
+        sigma: 1.0,
+    }
+    .quantile(open_unit(rng))
 }
 
-impl ParametricGenerator {
-    fn new(sizes: [usize; 3]) -> Self {
-        let [np, ni, nr] = sizes;
-        Self {
-            sizes,
-            effects: [
-                vec![0.0; np],
-                vec![0.0; ni],
-                vec![0.0; nr],
-                vec![0.0; np * ni],
-                vec![0.0; np * nr],
-                vec![0.0; ni * nr],
-                vec![0.0; np * ni * nr],
-            ],
-            normal: salib_core::Distribution::Normal {
-                mu: 0.0,
-                sigma: 1.0,
-            },
+/// χ²(df) deviate: twice a Gamma(df/2) deviate from Marsaglia & Tsang (2000),
+/// with the `U^(1/a)` boost for shape a < 1.
+fn chi_square(df: f64, rng: &mut impl RngCore) -> f64 {
+    fn gamma(shape: f64, rng: &mut impl RngCore) -> f64 {
+        if shape < 1.0 {
+            return gamma(shape + 1.0, rng) * open_unit(rng).powf(1.0 / shape);
         }
-    }
-
-    fn fill(&mut self, out: &mut Array3<f64>, scale: &[f64; 7], rng: &mut impl RngCore) {
-        let [_, ni, nr] = self.sizes;
-        for (k, effect) in self.effects.iter_mut().enumerate() {
-            for value in effect.iter_mut() {
-                *value = scale[k] * self.normal.quantile(open_unit(rng));
+        let d = shape - 1.0 / 3.0;
+        let c = 1.0 / (9.0 * d).sqrt();
+        loop {
+            let x = standard_normal(rng);
+            let v = (1.0 + c * x).powi(3);
+            if v > 0.0 && open_unit(rng).ln() < 0.5 * x * x + d - d * v + d * v.ln() {
+                return d * v;
             }
         }
-        let e = &self.effects;
-        for ((a, b, c), value) in out.indexed_iter_mut() {
-            *value = e[0][a]
-                + e[1][b]
-                + e[2][c]
-                + e[3][a * ni + b]
-                + e[4][a * nr + c]
-                + e[5][b * nr + c]
-                + e[6][(a * ni + b) * nr + c];
-        }
     }
+    2.0 * gamma(df / 2.0, rng)
+}
+
+/// Expected mean squares at the given counts, in [`GTheoryComponent::ALL`]
+/// order (Brennan 2001). Given the estimates, they are the observed mean squares.
+fn expected_mean_squares(components: &[f64; 7], sizes: [usize; 3]) -> [f64; 7] {
+    let [p, i, r, pi, pr, ir, pir] = *components;
+    let [np, ni, nr] = sizes.map(|v| v as f64);
+    [
+        pir + nr * pi + ni * pr + ni * nr * p,
+        pir + nr * pi + np * ir + np * nr * i,
+        pir + ni * pr + np * ir + np * ni * r,
+        pir + nr * pi,
+        pir + ni * pr,
+        pir + np * ir,
+        pir,
+    ]
+}
+
+/// Mean-square degrees of freedom, in [`GTheoryComponent::ALL`] order.
+fn degrees_of_freedom(sizes: [usize; 3]) -> [f64; 7] {
+    let [fp, fi, fr] = sizes.map(|v| v as f64 - 1.0);
+    [fp, fi, fr, fp * fi, fp * fr, fi * fr, fp * fi * fr]
+}
+
+/// The expected-mean-square equations solved for the components.
+fn components_from_mean_squares(ms: &[f64; 7], sizes: [usize; 3]) -> [f64; 7] {
+    let [p, i, r, pi, pr, ir, pir] = *ms;
+    let [np, ni, nr] = sizes.map(|v| v as f64);
+    [
+        (p - pi - pr + pir) / (ni * nr),
+        (i - pi - ir + pir) / (np * nr),
+        (r - pr - ir + pir) / (np * ni),
+        (pi - pir) / nr,
+        (pr - pir) / ni,
+        (ir - pir) / np,
+        pir,
+    ]
+}
+
+/// Fiducial generalized pivotal quantity for the components (Hannig, Iyer &
+/// Patterson 2006, JASA 101:254, Theorem 2). Under the balanced normal model
+/// `SS_j/EMS_j ~ χ²(df_j)` independently, so `R_j = MS_j df_j / U_j` with
+/// `U_j ~ χ²(df_j)` is a fiducial quantity for `EMS_j`; the components follow
+/// from the EMS equations. With `U_j = df_j` it returns the estimates.
+fn fiducial_components(
+    ms: &[f64; 7],
+    df: &[f64; 7],
+    pivots: &[f64; 7],
+    sizes: [usize; 3],
+) -> [f64; 7] {
+    components_from_mean_squares(&std::array::from_fn(|j| ms[j] * df[j] / pivots[j]), sizes)
 }
 
 /// Closed-form interval for G at the G-study counts.
@@ -979,26 +1011,9 @@ fn satterthwaite_intervals(
     // no square under- or overflows; the bounds are then scaled back.
     let exponent = unit_exponent(&components);
     let components = components.map(|c| scale_by_pow2(c, -exponent));
-    let [p, i, r, pi, pr, ir, pir] = components;
     let [np, ni, nr] = sizes.map(|v| v as f64);
-    let ms = [
-        pir + nr * pi + ni * pr + ni * nr * p,
-        pir + nr * pi + np * ir + np * nr * i,
-        pir + ni * pr + np * ir + np * ni * r,
-        pir + nr * pi,
-        pir + ni * pr,
-        pir + np * ir,
-        pir,
-    ];
-    let df = [
-        np - 1.0,
-        ni - 1.0,
-        nr - 1.0,
-        (np - 1.0) * (ni - 1.0),
-        (np - 1.0) * (nr - 1.0),
-        (ni - 1.0) * (nr - 1.0),
-        (np - 1.0) * (ni - 1.0) * (nr - 1.0),
-    ];
+    let ms = expected_mean_squares(&components, sizes);
+    let df = degrees_of_freedom(sizes);
     // Mean squares and divisor of each component's EMS estimator.
     let terms: [(&[usize], f64); 7] = [
         (&[0, 3, 4, 6], ni * nr),
@@ -1062,17 +1077,16 @@ pub struct GTheoryBootstrap {
     pub component_ci: [Option<(f64, f64)>; 7],
     /// Closed-form F interval for G at the grid's counts; `None` when unavailable.
     pub g_coefficient_ci: Option<(f64, f64)>,
-    /// Parametric-bootstrap percentile interval for Phi.
+    /// Fiducial (generalized pivotal quantity) percentile interval for Phi.
     pub phi_coefficient_ci: Option<(f64, f64)>,
-    /// Draws per stream: three facet streams and one parametric stream.
+    /// Draws per stream: three facet streams and one fiducial stream.
     pub n_resamples: usize,
     /// Two-sided level: bounds are the `alpha/2` and `1 − alpha/2` points.
     pub alpha: f64,
     /// Failed fits in the p, i and r facet streams.
     pub facet_skipped: [usize; 3],
-    /// Failed fits in the parametric stream.
-    pub parametric_skipped: usize,
-    /// Parametric replicates whose clipped Phi was 0/0.
+    /// Fiducial draws whose clipped Phi was 0/0, which happens only when
+    /// every estimated component is zero.
     pub phi_coefficient_failed: usize,
 }
 
@@ -1098,15 +1112,21 @@ pub struct GTheoryBootstrap {
 /// - **G interval.** Closed-form F interval from the observed mean squares
 ///   (see `g_f_interval` in the source), at the grid's counts only.
 ///   Calibrated in 86 of 90 study cells, including all binary cells.
-/// - **Phi interval.** Parametric bootstrap: the point components, with
-///   negatives zeroed, generate normal data at the grid's counts, and the
-///   interval is the percentile range of the refitted, clipped Phi. **Not
-///   calibrated:** 14 of 90 study cells pass (median coverage .946). It
-///   reproduces Jiang et al. (2022) in their own 100 × 20 × 2 condition (.960)
-///   but undercovers with many persons and items: as low as .69 with two or
-///   three raters, and ≤ .87 even with five at n_p = 200. The estimated rater
-///   variance is too noisy, so the bootstrap is too narrow and too optimistic
-///   (salib #10).
+/// - **Phi interval.** Fiducial generalized pivotal quantity (Hannig, Iyer &
+///   Patterson 2006): each draw replaces every mean square `MS_j` by
+///   `MS_j df_j / U_j` with `U_j ~ χ²(df_j)`, solves the expected-mean-square
+///   equations, clips the components at zero and evaluates Phi. The interval
+///   is the percentile range of the draws. No data are refitted. Unlike a
+///   plug-in bootstrap it carries the uncertainty of every mean square,
+///   including a rater mean square with one or two degrees of freedom, so it
+///   is wide when raters are few. On normal data its two-sided coverage is
+///   .938–.967 in all 81 study cells (median .952). Its misses are lopsided:
+///   per cell, the interval lies below Phi in 2.4–6.0% of samples and above
+///   it in 0–2.8% (4.3% and 0.6% on average). The lower bound is usually
+///   conservative but only about nominal in some large-n_p, few-rater cells.
+///   The upper bound behaves as a 94–97.6% one-sided bound. On binary data
+///   coverage is .918–.947 (salib #10,
+///   `papers/2026-10-25-phi-fiducial-interval.md`).
 ///
 /// Not established: D-study counts, finite universes, near-zero components,
 /// and simultaneous coverage.
@@ -1117,14 +1137,15 @@ pub struct GTheoryBootstrap {
 /// every component zero.
 ///
 /// Every call draws one word from `rng` as a nonce and uses child streams
-/// forked from it: `g-theory/boot-p`, `/boot-i`, `/boot-r` and `/parametric`.
+/// forked from it: `g-theory/boot-p`, `/boot-i`, `/boot-r` and `/fiducial`.
 /// `n_resamples` applies to each stream. Results are bit-reproducible for a
 /// given `rng`, platform and statrs version.
 ///
 /// # Errors
 ///
 /// Returns [`GTheoryBootstrapError`] if the original grid or arguments are
-/// invalid, or if every draw of a stream fails.
+/// invalid, or if every draw of a facet stream fails. When every fiducial Phi
+/// draw is 0/0 (all components zero), the Phi interval is `None`.
 pub fn bootstrap_g_theory_pir(
     grid: ArrayView3<'_, f64>,
     design: GTheoryDesign,
@@ -1197,26 +1218,22 @@ pub fn bootstrap_g_theory_pir(
         }
     }
 
-    // Parametric stream for Phi: normal effect arrays from the zeroed point components.
-    let generating = point.with_negative_components_zeroed().components();
-    let scale = generating.map(f64::sqrt);
-    let mut stream = child(b"g-theory/parametric");
+    // Fiducial stream for Phi. Phi is scale-free, so the draws are made at
+    // unit scale, where the mean squares cannot overflow.
+    let exponent = unit_exponent(&point.components());
+    let unit = point.components().map(|c| scale_by_pow2(c, -exponent));
+    let ms = expected_mean_squares(&unit, sizes);
+    let df = degrees_of_freedom(sizes);
+    let mut stream = child(b"g-theory/fiducial");
     let mut phi_samples = Vec::with_capacity(n_resamples);
-    let mut parametric_skipped = 0usize;
     let mut phi_failed = 0usize;
-    let mut generator = ParametricGenerator::new(sizes);
     for _ in 0..n_resamples {
-        generator.fill(&mut resampled, &scale, &mut stream);
-        match fit_replicate(resampled.view(), design) {
-            Ok(fit) => match fit.with_negative_components_zeroed().phi_coefficient {
-                Ok(phi) => phi_samples.push(phi),
-                Err(_) => phi_failed += 1,
-            },
-            Err(_) => parametric_skipped += 1,
+        let pivots = df.map(|d| chi_square(d, &mut stream));
+        let draw = fiducial_components(&ms, &df, &pivots, sizes).map(|c| c.max(0.0));
+        match coefficients(&draw, sizes[1], sizes[2]).1 {
+            Ok(phi) => phi_samples.push(phi),
+            Err(_) => phi_failed += 1,
         }
-    }
-    if parametric_skipped == n_resamples {
-        return Err(GTheoryBootstrapError::AllResamplesFailed);
     }
     Ok(GTheoryBootstrap {
         plan,
@@ -1231,7 +1248,6 @@ pub fn bootstrap_g_theory_pir(
         n_resamples,
         alpha,
         facet_skipped,
-        parametric_skipped,
         phi_coefficient_failed: phi_failed,
     })
 }
@@ -1814,72 +1830,6 @@ mod tests {
         );
     }
 
-    /// The parametric generator's mean squares have the balanced normal-theory
-    /// law: E MS_e = EMS_e and Var MS_e = 2 EMS_e²/df_e (within 4 MCSE).
-    #[test]
-    fn parametric_generator_has_normal_theory_mean_square_moments() {
-        let sizes = [6, 4, 3];
-        let [np, ni, nr] = sizes.map(|v| v as f64);
-        let theta = [1.0, 0.5, 0.3, 0.8, 0.2, 0.4, 1.0];
-        let [p, i, r, pi, pr, ir, pir] = theta;
-        let ems = [
-            pir + nr * pi + ni * pr + ni * nr * p,
-            pir + nr * pi + np * ir + np * nr * i,
-            pir + ni * pr + np * ir + np * ni * r,
-            pir + nr * pi,
-            pir + ni * pr,
-            pir + np * ir,
-            pir,
-        ];
-        let df = [
-            np - 1.0,
-            ni - 1.0,
-            nr - 1.0,
-            (np - 1.0) * (ni - 1.0),
-            (np - 1.0) * (nr - 1.0),
-            (ni - 1.0) * (nr - 1.0),
-            (np - 1.0) * (ni - 1.0) * (nr - 1.0),
-        ];
-        let mut generator = ParametricGenerator::new(sizes);
-        let mut rng = RngState::from_seed([0x5a; 32]).into_chacha();
-        let mut out = Array3::<f64>::zeros((6, 4, 3));
-        let reps = 20_000;
-        let mut ms: Vec<[f64; 7]> = Vec::with_capacity(reps);
-        for _ in 0..reps {
-            generator.fill(&mut out, &theta.map(f64::sqrt), &mut rng);
-            let c = estimate_g_theory_pir(out.view(), GTheoryDesign::Crossed)
-                .unwrap()
-                .components();
-            let [p, i, r, pi, pr, ir, pir] = c;
-            ms.push([
-                pir + nr * pi + ni * pr + ni * nr * p,
-                pir + nr * pi + np * ir + np * nr * i,
-                pir + ni * pr + np * ir + np * ni * r,
-                pir + nr * pi,
-                pir + ni * pr,
-                pir + np * ir,
-                pir,
-            ]);
-        }
-        let n = reps as f64;
-        for k in 0..7 {
-            let variance = 2.0 * ems[k] * ems[k] / df[k];
-            let mean = ms.iter().map(|m| m[k]).sum::<f64>() / n;
-            let sample_var = ms.iter().map(|m| (m[k] - mean).powi(2)).sum::<f64>() / (n - 1.0);
-            assert!(
-                (mean - ems[k]).abs() <= 4.0 * (variance / n).sqrt(),
-                "MS {k} mean {mean} vs {}",
-                ems[k]
-            );
-            // Scaled χ²_df/df has excess kurtosis 12/df.
-            let se_var = variance * ((2.0 + 12.0 / df[k]) / n).sqrt();
-            assert!(
-                (sample_var - variance).abs() <= 4.0 * se_var,
-                "MS {k} var {sample_var} vs {variance}"
-            );
-        }
-    }
-
     #[test]
     fn bootstrap_is_reproducible_and_advances_its_state() {
         let mut a = RngState::from_seed([0x44; 32]);
@@ -2031,8 +1981,8 @@ mod tests {
         assert!((got - value).abs() <= 1e-3 * value, "{got:e} {value:e}");
     }
 
-    /// Every component snaps to zero, so the parametric data are constant and
-    /// each replicate's Phi is 0/0: counted as failed, not skipped.
+    /// Every component snaps to zero, so every mean square is zero and each
+    /// fiducial draw's Phi is 0/0: counted as failed.
     #[test]
     fn bootstrap_counts_undefined_phi_replicates() {
         let grid = Array3::from_shape_fn((2, 2, 2), |(p, i, r)| {
@@ -2043,7 +1993,6 @@ mod tests {
         let boot = bootstrap_g_theory_pir(grid.view(), GTheoryDesign::Crossed, 32, 0.05, &mut rng)
             .unwrap();
         assert_eq!(boot.phi_coefficient_failed, 32);
-        assert_eq!(boot.parametric_skipped, 0);
         assert_eq!(boot.phi_coefficient_ci, None);
     }
 
@@ -2062,11 +2011,8 @@ mod tests {
             let skipped = boot.facet_skipped[boot.plan[k].axis()] > 0;
             assert_eq!(boot.component_se[k].is_none(), skipped, "component {k}");
         }
-        assert!(
-            0 < boot.parametric_skipped && boot.parametric_skipped < 200,
-            "{}",
-            boot.parametric_skipped
-        );
+        // Phi is scale-free and needs no refits, so its interval survives.
+        assert!(boot.phi_coefficient_ci.is_some());
     }
 
     /// One resample per stream: no standard error, and the Phi interval is
@@ -2153,39 +2099,6 @@ mod tests {
         }
     }
 
-    /// With one unit scale, every cell must equal that effect's draw at the
-    /// cell's index, with a positive sign.
-    #[test]
-    fn parametric_generator_places_each_effect() {
-        let sizes = [3, 4, 2];
-        let [_, ni, nr] = sizes;
-        let mut generator = ParametricGenerator::new(sizes);
-        let mut rng = RngState::from_seed([0x36; 32]).into_chacha();
-        let mut out = Array3::<f64>::zeros((3, 4, 2));
-        for k in 0..7 {
-            let mut scale = [0.0; 7];
-            scale[k] = 1.0;
-            generator.fill(&mut out, &scale, &mut rng);
-            for ((a, b, c), &value) in out.indexed_iter() {
-                let index = [
-                    a,
-                    b,
-                    c,
-                    a * ni + b,
-                    a * nr + c,
-                    b * nr + c,
-                    (a * ni + b) * nr + c,
-                ][k];
-                assert_eq!(
-                    value,
-                    generator.effects[k][index],
-                    "effect {k} at {:?}",
-                    (a, b, c)
-                );
-            }
-        }
-    }
-
     struct ConstantWord(u64);
 
     impl RngCore for ConstantWord {
@@ -2209,6 +2122,151 @@ mod tests {
             open_unit(&mut ConstantWord(u64::MAX)),
             1.0 - 2.0_f64.powi(-53)
         );
+    }
+
+    /// χ²(df) has mean df and variance 2·df, checked within 5 MCSE on both
+    /// sides of the shape-1 boost.
+    #[test]
+    fn chi_square_sampler_has_the_right_moments() {
+        let mut rng = RngState::from_seed([0x38; 32]).into_chacha();
+        let n = 100_000;
+        for df in [0.5, 1.0, 2.0, 3.0, 19.0, 3781.0] {
+            let x: Vec<f64> = (0..n).map(|_| chi_square(df, &mut rng)).collect();
+            let mean = x.iter().sum::<f64>() / f64::from(n);
+            let var = x.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / f64::from(n - 1);
+            let se_mean = (2.0 * df / f64::from(n)).sqrt();
+            // Var of the sample variance is (μ₄ − σ⁴)/n, with μ₄ = 12df + 12df².
+            let se_var = ((12.0 * df + 8.0 * df * df) / f64::from(n)).sqrt();
+            assert!((mean - df).abs() < 5.0 * se_mean, "df {df}: mean {mean}");
+            assert!((var - 2.0 * df).abs() < 5.0 * se_var, "df {df}: var {var}");
+        }
+    }
+
+    /// With every pivot at its degrees of freedom the fiducial quantity returns
+    /// the estimates (Hannig et al.'s FGPQ2: R(s, s) = θ).
+    #[test]
+    fn fiducial_quantity_at_its_centre_returns_the_estimates() {
+        // Unequal counts, so a divisor taken from the wrong facet shows.
+        let c = [0.8, 0.3, 0.2, 1.0, 0.4, 0.3, 1.0];
+        let sizes = [7, 5, 3];
+        let df = degrees_of_freedom(sizes);
+        let back = fiducial_components(&expected_mean_squares(&c, sizes), &df, &df, sizes);
+        for k in 0..7 {
+            assert!(
+                (back[k] - c[k]).abs() <= 1e-14,
+                "{k}: {} vs {}",
+                back[k],
+                c[k]
+            );
+        }
+    }
+
+    /// Replays the documented fiducial stream at unequal counts. The
+    /// components come from Gaussian elimination on the EMS coefficient
+    /// matrix, and Phi from its definition with items and raters named, so
+    /// a wrong inversion or swapped counts in the library would show.
+    #[test]
+    fn phi_interval_replays_the_fiducial_stream() {
+        let (np, ni, nr) = (6, 4, 3);
+        let sizes = [np, ni, nr];
+        let data = Array3::from_shape_fn((np, ni, nr), |(p, i, r)| {
+            ((3 * p * p + 7 * i + 5 * r * r + 2 * p * i * r) % 13) as f64
+        });
+        let seed = RngState::from_seed([0x39; 32]);
+        let mut rng = seed.clone();
+        let (m, alpha) = (400, 0.1);
+        let boot = bootstrap_g_theory_pir(data.view(), GTheoryDesign::Crossed, m, alpha, &mut rng)
+            .unwrap();
+        let point = estimate_g_theory_pir(data.view(), GTheoryDesign::Crossed)
+            .unwrap()
+            .components();
+        let ms = expected_mean_squares(&point, sizes);
+        let df = degrees_of_freedom(sizes);
+        // Column k of the EMS map is the image of the k-th unit component.
+        let columns: Vec<[f64; 7]> = (0..7)
+            .map(|k| {
+                let mut e = [0.0; 7];
+                e[k] = 1.0;
+                expected_mean_squares(&e, sizes)
+            })
+            .collect();
+        let solve = |rhs: [f64; 7]| -> [f64; 7] {
+            let mut a: Vec<[f64; 8]> = (0..7)
+                .map(|j| std::array::from_fn(|k| if k < 7 { columns[k][j] } else { rhs[j] }))
+                .collect();
+            for col in 0..7 {
+                let pivot = (col..7)
+                    .max_by(|&x, &y| a[x][col].abs().total_cmp(&a[y][col].abs()))
+                    .unwrap();
+                a.swap(col, pivot);
+                for row in 0..7 {
+                    if row != col {
+                        let pivot_row = a[col];
+                        let f = a[row][col] / pivot_row[col];
+                        for (x, p) in a[row].iter_mut().zip(pivot_row).skip(col) {
+                            *x -= f * p;
+                        }
+                    }
+                }
+            }
+            std::array::from_fn(|k| a[k][7] / a[k][k])
+        };
+        let nonce = seed.clone().into_chacha().next_u64().to_le_bytes();
+        let mut stream = seed
+            .fork(&[b"g-theory/fiducial".as_slice(), &nonce].concat())
+            .into_chacha();
+        let (fi, fr) = (ni as f64, nr as f64);
+        let phis: Vec<f64> = (0..m)
+            .map(|_| {
+                let pivots = df.map(|d| chi_square(d, &mut stream));
+                let c =
+                    solve(std::array::from_fn(|j| ms[j] * df[j] / pivots[j])).map(|v| v.max(0.0));
+                let [p, i, r, pi, pr, ir, pir] = c;
+                let absolute_error = i / fi + r / fr + pi / fi + pr / fr + (ir + pir) / (fi * fr);
+                p / (p + absolute_error)
+            })
+            .collect();
+        let want = bounded_percentiles(&phis, 0, alpha).unwrap();
+        let got = boot.phi_coefficient_ci.unwrap();
+        assert!(
+            (got.0 - want.0).abs() <= 1e-12 && (got.1 - want.1).abs() <= 1e-12,
+            "{got:?} vs {want:?}"
+        );
+    }
+
+    mod sage_fiducial_oracle {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/oracles/g_theory_fiducial.rs"
+        ));
+    }
+
+    /// Pinned against exact quantiles of the fiducial distributions of σ²(pir)
+    /// and σ²(pi) from Sage. The share of draws at or below each exact quantile
+    /// must be within 5 binomial standard errors of its level.
+    #[test]
+    fn fiducial_draws_match_exact_quantiles() {
+        let n = 100_000;
+        for case in sage_fiducial_oracle::FIDUCIAL_CASES {
+            let ms = expected_mean_squares(&case.components, case.sizes);
+            let df = degrees_of_freedom(case.sizes);
+            let mut rng = RngState::from_seed([0x37; 32]).into_chacha();
+            let draws: Vec<[f64; 7]> = (0..n)
+                .map(|_| {
+                    let pivots = df.map(|d| chi_square(d, &mut rng));
+                    fiducial_components(&ms, &df, &pivots, case.sizes)
+                })
+                .collect();
+            for &(k, level, value) in case.quantiles {
+                let share = draws.iter().filter(|d| d[k] <= value).count() as f64 / f64::from(n);
+                let se = (level * (1.0 - level) / f64::from(n)).sqrt();
+                assert!(
+                    (share - level).abs() <= 5.0 * se,
+                    "{:?} component {k}: share {share} at the exact {level} quantile {value}",
+                    case.sizes
+                );
+            }
+        }
     }
 
     /// Pinned against 50-digit regularized incomplete gamma values from Sage,

@@ -58,7 +58,7 @@ fn g_theory_bootstrap_is_deterministic_and_records_its_procedures() {
     assert_eq!(Some(boot), b.bootstrap.as_ref());
     assert_eq!(boot.plan, g_theory_resampling_plan([2, 2, 2]));
     assert_eq!((boot.n_resamples, boot.alpha), (128, 0.05));
-    assert_eq!((boot.facet_skipped, boot.parametric_skipped), ([0; 3], 0));
+    assert_eq!(boot.facet_skipped, [0; 3]);
     assert!(boot.component_se.iter().all(Option::is_some));
 }
 
