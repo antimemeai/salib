@@ -110,8 +110,11 @@ fn bootstrap_attachment_follows_the_parameter() {
     assert!(low <= 243.0 / 301.0 && 243.0 / 301.0 <= high);
     assert!(r.g_coefficient_interval().is_some());
     assert_eq!(zeroed.g_coefficient_interval(), r.g_coefficient_interval());
-    // Satterthwaite gives no interval for the negative σ²(r) and σ²(ir).
-    assert_eq!((boot.component_ci[2], boot.component_ci[5]), (None, None));
+    // The negative σ²(r) and σ²(ir) still get fiducial intervals.
+    for k in [2, 5] {
+        let (low, high) = boot.component_ci[k].unwrap();
+        assert!(low == 0.0 && high > 0.0, "component {k}: {low} {high}");
+    }
     // Standard errors describe the signed estimates only.
     assert!(boot.component_se.iter().all(Option::is_some));
     assert_eq!(zeroed.bootstrap.as_ref().unwrap().component_se, [None; 7]);

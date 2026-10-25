@@ -506,9 +506,9 @@ fn report_cell(out: &mut String, cell: &Cell, reps: &[Rep]) {
             out,
             cell,
             NAMES[k],
-            // salib's component interval. Satterthwaite since b475c07; the
-            // 2026-10-25 study ran before that and these rows were parametric.
-            "salib (Satterthwaite)",
+            // salib's component interval: fiducial GPQ since salib #12,
+            // Satterthwaite from b475c07, and parametric in the 2026-10-25 study.
+            "salib (fiducial)",
             t[k],
             &summarize(t[k], &pick(&|r| r.ci[k]), &points),
             &extra,
@@ -517,8 +517,8 @@ fn report_cell(out: &mut String, cell: &Cell, reps: &[Rep]) {
             out,
             cell,
             NAMES[k],
-            // The harness's own implementation: an independent comparator
-            // that should agree with salib's row.
+            // The harness's own Satterthwaite implementation, kept as the
+            // comparator for the interval salib #12 replaced.
             "harness Satterthwaite",
             t[k],
             &summarize(t[k], &pick(&|r| r.satt[k]), &points),
