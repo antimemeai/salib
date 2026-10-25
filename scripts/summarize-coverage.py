@@ -60,7 +60,7 @@ def main(paths):
     print("|---|---|")
     for e in COMPONENTS:
         v = [float(r["notes"].split()[-1]) for r in data
-             if r["estimand"] == e and r["method"] == "parametric" and "ratio" in r["notes"]]
+             if r["estimand"] == e and "ratio" in r["notes"]]
         if v:
             print(f"| {e} | {q(v)} |")
 

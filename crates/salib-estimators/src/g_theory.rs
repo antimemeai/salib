@@ -937,17 +937,18 @@ fn chi_square_cdf(chi: &ChiSquared, nu: f64, x: f64) -> f64 {
     if x >= 1e-10 {
         return chi.cdf(x);
     }
+    // ln y is taken as ln x − ln 2: x/2 rounds to 0 for the smallest subnormals.
     let (a, y) = (nu / 2.0, x / 2.0);
     let series = 1.0 + y / (a + 1.0) * (1.0 + y / (a + 2.0));
-    (a * y.ln() - y - ln_gamma(a + 1.0)).exp() * series
+    (a * (x.ln() - std::f64::consts::LN_2) - y - ln_gamma(a + 1.0)).exp() * series
 }
 
 /// Satterthwaite interval for each component (Brennan, Harris & Hanson 1987,
 /// ACT RR 87-7, App. A): `[σ̂ ν/χ²_{1−α/2}(ν), σ̂ ν/χ²_{α/2}(ν)]` with
 /// `ν = 2 σ̂²/Σ_j 2 (c_j MS_j)²/df_j`, the mean squares recovered from the
 /// components through the expected-mean-square equations. `None` when
-/// `σ̂ ≤ 0`. When ν is tiny the interval can lie entirely above σ̂, and its
-/// upper bound can be infinite. Normal theory: in salib's coverage study it is calibrated for
+/// `σ̂ ≤ 0`. When ν is tiny the interval can lie entirely above σ̂, and
+/// either bound can be infinite (both, for ν below about 1e-4 at α = 0.05). Normal theory: in salib's coverage study it is calibrated for
 /// σ²(pir), and for σ²(pi), σ²(pr) and σ²(ir) with n_p ≥ 50 and a
 /// non-negligible component, but not for σ²(p), σ²(i), σ²(r) or binary data.
 fn satterthwaite_intervals(
@@ -998,18 +999,19 @@ fn satterthwaite_intervals(
         let nu = 2.0 * estimate * estimate / variance;
         let chi = ChiSquared::new(nu).ok()?;
         let cdf = |x: f64| chi_square_cdf(&chi, nu, x);
-        let high = quantile_by_bisection(cdf, 1.0 - alpha / 2.0)?;
-        let upper = if cdf(f64::MIN_POSITIVE) >= alpha / 2.0 {
-            // The lower quantile is below the normal f64 range, where
-            // P(χ²_ν ≤ x) = (x/2)^(ν/2) / Γ(ν/2 + 1) to relative error O(x);
-            // solve that in logs. The bound overflows to ∞ when it should.
-            let a = nu / 2.0;
-            let ln_q = std::f64::consts::LN_2 + ((alpha / 2.0).ln() + ln_gamma(a + 1.0)) / a;
-            ((estimate * nu).ln() - ln_q).exp()
-        } else {
-            estimate * nu / quantile_by_bisection(cdf, alpha / 2.0)?
+        // A χ² quantile below the normal f64 range is solved in logs from
+        // P(χ²_ν ≤ x) = (x/2)^(ν/2) / Γ(ν/2 + 1), exact to relative error O(x)
+        // there; the bound σ̂ν/q then overflows to ∞ when it should.
+        let bound = |prob: f64| -> Option<f64> {
+            if cdf(f64::MIN_POSITIVE) >= prob {
+                let a = nu / 2.0;
+                let ln_q = std::f64::consts::LN_2 + (prob.ln() + ln_gamma(a + 1.0)) / a;
+                Some(((estimate * nu).ln() - ln_q).exp())
+            } else {
+                Some(estimate * nu / quantile_by_bisection(cdf, prob)?)
+            }
         };
-        Some((estimate * nu / high, upper))
+        Some((bound(1.0 - alpha / 2.0)?, bound(alpha / 2.0)?))
     })
 }
 
@@ -1068,12 +1070,13 @@ pub struct GTheoryBootstrap {
 ///   Calibrated in 86 of 90 study cells, including all binary cells.
 /// - **Phi interval.** Parametric bootstrap: the point components, with
 ///   negatives zeroed, generate normal data at the grid's counts, and the
-///   interval is the percentile range of the refitted, clipped Phi. It
+///   interval is the percentile range of the refitted, clipped Phi. **Not
+///   calibrated:** 14 of 90 study cells pass (median coverage .946). It
 ///   reproduces Jiang et al. (2022) in their own 100 × 20 × 2 condition (.960)
-///   and has median coverage .946 over the study. It is **unreliable when
-///   there are two or three raters and many persons and items** (as low as
-///   .69): the estimated rater variance is then too noisy, and the bootstrap
-///   is too narrow and too optimistic.
+///   but undercovers with many persons and items: as low as .69 with two or
+///   three raters, and ≤ .87 even with five at n_p = 200. The estimated rater
+///   variance is too noisy, so the bootstrap is too narrow and too optimistic
+///   (salib #10).
 ///
 /// Not established: D-study counts, finite universes, near-zero components,
 /// and simultaneous coverage.

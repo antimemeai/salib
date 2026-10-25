@@ -130,20 +130,22 @@ B = 999, at c5ee8b4. Design: journal "Phi experiment".
   generating values, and a percentile interval, which they do not specify)
   are not what fails.
 - **Limit.** In cells with many persons and items but two or three raters,
-  the bootstrap spread is 14–20% narrower than the true spread, and every
-  miss lies above the truth. This fits the plug-in hypothesis: with one or
+  the bootstrap spread is 8–20% narrower than the true spread, and almost
+  every miss lies above the truth (one cell has a .0011 rate below). This fits the plug-in hypothesis: with one or
   two rater degrees of freedom the estimated rater variance is often zeroed
   or too small, so the bootstrap simulates too little rater variation and too
   high a Φ. Bias-corrected percentile does not fix it, and the basic
   interval is worse.
 - **Flawed oracle arm.** Generating from the true components makes the
-  percentile interval essentially fixed across replications, so it always
-  covers the truth (1.000 by construction), and the basic and bias-corrected
-  rows built on it are not meaningful. Only its widths, the true sampling
+  percentile interval essentially fixed across replications, and here it
+  happened to contain Φ every time (1.000). That is not a property of the
+  method: a sufficiently biased Φ̂ would score 0. The basic and
+  bias-corrected rows built on it are not meaningful. Only its widths, the true sampling
   spread of Φ̂, are used above.
 
 **Decision (operator).** Keep the parametric percentile Phi interval,
-documented as reproducing Jiang et al. (median .946 over the 90 study cells)
-and unreliable when n_r ≤ 3 with large n_p and n_i. A follow-up should
+documented as not calibrated (14/90 cells, median .946). It reproduces
+Jiang et al. but undercovers at large n_p: as low as .69 with two or three
+raters, and ≤ .87 even with five at n_p = 200. A follow-up should
 propagate rater-component uncertainty, either with a nested bootstrap or a
 closed form analogous to G's F interval.

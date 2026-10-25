@@ -353,7 +353,6 @@ struct Rep {
     g_ci: Option<(f64, f64)>,
     phi_clipped: Option<f64>,
     phi_ci: Option<(f64, f64)>,
-    phi_ci_attached: Option<(f64, f64)>,
     base: Option<Baseline>,
     failures: usize,
 }
@@ -379,8 +378,6 @@ fn replicate(cell: &Cell, rep: usize, b: usize) -> Result<Rep, Box<dyn Error + S
     let mut boot_rng = root.fork(salt("boot").as_bytes());
     let boot = bootstrap_g_theory_pir(y.view(), GTheoryDesign::Crossed, b, ALPHA, &mut boot_rng)?;
     let clipped = point.with_negative_components_zeroed();
-    let mut with_boot = point.clone();
-    with_boot.bootstrap = Some(boot.clone());
     let base = cell.baseline.then(|| {
         baseline(
             &y,
@@ -399,7 +396,6 @@ fn replicate(cell: &Cell, rep: usize, b: usize) -> Result<Rep, Box<dyn Error + S
         g_ci: boot.g_coefficient_ci,
         phi_clipped: clipped.phi_coefficient.ok(),
         phi_ci: boot.phi_coefficient_ci,
-        phi_ci_attached: with_boot.phi_coefficient_interval(),
         base,
         failures: boot.facet_skipped.iter().sum::<usize>() + boot.parametric_skipped,
     })
@@ -508,7 +504,9 @@ fn report_cell(out: &mut String, cell: &Cell, reps: &[Rep]) {
             out,
             cell,
             NAMES[k],
-            "parametric",
+            // salib's component interval. Satterthwaite since b475c07; the
+            // 2026-10-25 study ran before that and these rows were parametric.
+            "salib (Satterthwaite)",
             t[k],
             &summarize(t[k], &pick(&|r| r.ci[k]), &points),
             &extra,
@@ -517,7 +515,9 @@ fn report_cell(out: &mut String, cell: &Cell, reps: &[Rep]) {
             out,
             cell,
             NAMES[k],
-            "Satterthwaite",
+            // The harness's own implementation: an independent comparator
+            // that should agree with salib's row.
+            "harness Satterthwaite",
             t[k],
             &summarize(t[k], &pick(&|r| r.satt[k]), &points),
             "",
@@ -559,15 +559,6 @@ fn report_cell(out: &mut String, cell: &Cell, reps: &[Rep]) {
         "parametric",
         phit,
         &summarize(phit, &pick(&|r| r.phi_ci), &phi_points),
-        "",
-    );
-    row(
-        out,
-        cell,
-        "Phi",
-        "parametric, attached",
-        phit,
-        &summarize(phit, &pick(&|r| r.phi_ci_attached), &phi_points),
         "",
     );
     if cell.baseline {

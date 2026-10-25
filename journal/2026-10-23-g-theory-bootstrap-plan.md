@@ -387,10 +387,37 @@ fit.
   f64. statrs' F cdf (beta) was checked to about 1e-14 down to 1e-300, so
   the G interval is unaffected.
   - The coverage harness's Satterthwaite comparator used statrs too, so its
-    tiny-ν upper bounds were truncated low. That would have shown up as
-    misses below the truth, and those rates are about 0 (at most .003, for
-    σ²(i)), so the study's conclusions stand. The harness is fixed for
-    future runs.
+    tiny-ν upper bounds were truncated. The truncated bound was still at
+    least σ̂ν/1e-20 (about 1e10), far above any truth in the study, so no
+    coverage result changes; per-cell lower misses for σ²(i) reach .024
+    from ordinary sampling, not from this. The harness is fixed for future
+    runs.
+
+## Final review (2026-10-25; operator: no further review after this one)
+
+No blockers. Fixed:
+- **The lower Satterthwaite bound underflowed too.** At ν below about 7e-5
+  (α = .05) the upper χ² quantile underflows f64, and the bisection returned
+  the smallest subnormal: a finite, wrong bound (1e306 where the exact value
+  is ∞). Both bounds now use the log-space solve below the normal range. The
+  series takes ln y as ln x − ln 2, because x/2 rounds to 0 for the smallest
+  subnormals.
+- **The Satterthwaite oracle** now finds quantiles by bisection on ln x, so
+  any depth resolves without the code's small-x formula. It adds the
+  reviewer's tiny-ν, small-unit case (both bounds ∞), and an independent
+  case that takes Brennan's Synthetic No. 3 mean squares from exact rational
+  ANOVA of the raw scores, which checks the code's EMS-recovery tables.
+  Worst error 2.5e-13.
+- **Harness labels.** The component rows are now "salib (Satterthwaite)"
+  and the independent "harness Satterthwaite". The duplicate attached-Phi
+  row is gone.
+- **Phi docs** state 14/90 not calibrated, including ≤ .87 with five
+  raters at n_p = 200.
+- **Papers.** 8–20% narrower, not 14–20%; one cell has a .0011 rate below;
+  the oracle arm's 1.000 is not by construction.
+- statrs loses accuracy in the far lower tail at very large ν (6e-7
+  relative at ν = 1e7, α = 1e-6). Negligible against interval width;
+  recorded, not changed.
 - **G: closed-form F interval.** Kept; calibrated in 86/90 cells.
 - **Phi: parametric percentile kept (operator decision)**, documented as
   reproducing Jiang et al. (.960 in their condition, median .946) and
