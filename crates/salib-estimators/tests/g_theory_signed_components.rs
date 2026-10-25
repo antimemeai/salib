@@ -90,7 +90,7 @@ fn design_search_refuses_signed_components_and_accepts_zeroed() {
 }
 
 #[test]
-fn bootstrap_attachment_follows_the_estimator() {
+fn bootstrap_attachment_follows_the_parameter() {
     let mut rng = RngState::from_seed([0x44; 32]);
     let r = estimate_g_theory_pir_with_bootstrap(
         gate1().view(),
@@ -101,17 +101,17 @@ fn bootstrap_attachment_follows_the_estimator() {
     )
     .unwrap();
     let boot = r.bootstrap.as_ref().unwrap();
-    // The signed Phi is unavailable, so its interval is withheld here...
+    // Coefficient intervals are intervals for the parameters, so both the
+    // signed result (whose Phi is unavailable) and the zeroed copy carry them.
     assert_eq!(r.phi_coefficient, Err(NEGATIVE_R));
-    assert_eq!(r.phi_coefficient_interval(), None);
-    assert!(boot.phi_coefficient_ci.is_some());
-    // ...and attached to the zeroed copy, whose Phi = 243/301 it describes.
     let zeroed = r.with_negative_components_zeroed();
-    let (low, high) = zeroed.phi_coefficient_interval().unwrap();
+    let (low, high) = r.phi_coefficient_interval().unwrap();
+    assert_eq!(zeroed.phi_coefficient_interval(), Some((low, high)));
     assert!(low <= 243.0 / 301.0 && 243.0 / 301.0 <= high);
-    // The F interval for G depends only on the signed mean squares: both carry it.
     assert!(r.g_coefficient_interval().is_some());
     assert_eq!(zeroed.g_coefficient_interval(), r.g_coefficient_interval());
+    // Satterthwaite gives no interval for the negative σ²(r) and σ²(ir).
+    assert_eq!((boot.component_ci[2], boot.component_ci[5]), (None, None));
     // Standard errors describe the signed estimates only.
     assert!(boot.component_se.iter().all(Option::is_some));
     assert_eq!(zeroed.bootstrap.as_ref().unwrap().component_se, [None; 7]);

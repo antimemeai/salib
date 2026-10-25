@@ -21,6 +21,7 @@ use rand::RngCore;
 use salib_core::RngState;
 use salib_estimators::{bootstrap_g_theory_pir, estimate_g_theory_pir, GTheoryDesign};
 use statrs::distribution::{ChiSquared, ContinuousCDF};
+use statrs::function::gamma::ln_gamma;
 
 const ALPHA: f64 = 0.05;
 const NAMES: [&str; 7] = ["p", "i", "r", "pi", "pr", "ir", "pir"];
@@ -229,9 +230,19 @@ fn satterthwaite(c: &[f64; 7], s: [usize; 3]) -> [Option<(f64, f64)>; 7] {
         }
         let nu = 2.0 * c[k] * c[k] / var;
         let chi = ChiSquared::new(nu).ok()?;
-        // statrs' Gamma::cdf panics when x·rate (x/2 here) underflows to 0,
-        // which bisection reaches for tiny nu; the cdf is 0 there.
-        let cdf = |x: f64| if x * 0.5 > 0.0 { chi.cdf(x) } else { 0.0 };
+        // statrs' cdf returns 0 for every x <= 1e-20 (and panics once x/2
+        // underflows); below 1e-10 use the lower regularized gamma series.
+        let cdf = |x: f64| {
+            if x <= 0.0 {
+                0.0
+            } else if x >= 1e-10 {
+                chi.cdf(x)
+            } else {
+                let (a, y) = (nu / 2.0, x / 2.0);
+                (a * y.ln() - y - ln_gamma(a + 1.0)).exp()
+                    * (1.0 + y / (a + 1.0) * (1.0 + y / (a + 2.0)))
+            }
+        };
         // statrs' inverse_cdf returns NaN for nu <= 1; bisect its cdf instead.
         let q = |prob: f64| {
             let (mut lo, mut hi) = (0.0_f64, 1.0_f64);
@@ -255,10 +266,15 @@ fn satterthwaite(c: &[f64; 7], s: [usize; 3]) -> [Option<(f64, f64)>; 7] {
             }
             (hi > 0.0).then_some(hi)
         };
-        Some((
-            c[k] * nu / q(1.0 - ALPHA / 2.0)?,
-            c[k] * nu / q(ALPHA / 2.0)?,
-        ))
+        // A lower quantile below the f64 range: solve the series' leading term in logs.
+        let upper = if cdf(f64::MIN_POSITIVE) >= ALPHA / 2.0 {
+            let a = nu / 2.0;
+            let ln_q = std::f64::consts::LN_2 + ((ALPHA / 2.0).ln() + ln_gamma(a + 1.0)) / a;
+            ((c[k] * nu).ln() - ln_q).exp()
+        } else {
+            c[k] * nu / q(ALPHA / 2.0)?
+        };
+        Some((c[k] * nu / q(1.0 - ALPHA / 2.0)?, upper))
     })
 }
 

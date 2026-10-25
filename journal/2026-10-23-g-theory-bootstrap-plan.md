@@ -366,3 +366,41 @@ variation.
 
 REML generating values are not tested: salib has no constrained likelihood
 fit.
+
+## Decisions from the study (2026-10-25)
+
+- **Component intervals: Satterthwaite.** The plan's "study picks" rule. It
+  beat parametric percentiles on every component, and the parametric
+  intervals sat too low because a percentile interval does not correct a
+  variance estimate's skew. It is calibrated for σ²(pir) on normal data, and
+  for σ²(pi), σ²(pr) and σ²(ir) with n_p ≥ 50 and a non-negligible
+  component, but not for σ²(p), σ²(i), σ²(r) or binary data. Implemented in
+  the library (`satterthwaite_intervals`) and pinned against 50-digit
+  mpmath χ² quantiles (`verify/sage/g_theory_satterthwaite.py`), worst
+  relative error 1e-13.
+- **The Sage oracle found a statrs defect.** `ChiSquared::cdf` returns
+  exactly 0 for every x ≤ 1e-20 at every ν, against exact values such as
+  0.85 at ν = 0.007, x = 1e-20. It is accurate to about 1e-15 from 1e-10 up.
+  salib's Synthetic No. 3 σ²(r) upper bound came out finite (2.3e10) where
+  the exact bound is about 1e454, i.e. ∞. Fix: a lower regularized-gamma
+  series below 1e-10, and a log-space solve when the quantile underflows
+  f64. statrs' F cdf (beta) was checked to about 1e-14 down to 1e-300, so
+  the G interval is unaffected.
+  - The coverage harness's Satterthwaite comparator used statrs too, so its
+    tiny-ν upper bounds were truncated low. That would have shown up as
+    misses below the truth, and those rates are about 0 (at most .003, for
+    σ²(i)), so the study's conclusions stand. The harness is fixed for
+    future runs.
+- **G: closed-form F interval.** Kept; calibrated in 86/90 cells.
+- **Phi: parametric percentile kept (operator decision)**, documented as
+  reproducing Jiang et al. (.960 in their condition, median .946) and
+  unreliable with two or three raters and many persons and items. Follow-up
+  in salib #10: nested bootstrap or a closed form. The interval now
+  attaches whether or not the signed Phi is available, because it is an
+  interval for the parameter; gating left it missing in about 24% of
+  datasets.
+- **The parametric stream now serves only Phi.**
+- **Satterthwaite behaviour at tiny ν.** The interval can lie above the
+  estimate (σ²(r) with two occasions: ν ≈ 0.007). That is correct
+  Satterthwaite behaviour, documented; tests assert containment only for
+  supported components.

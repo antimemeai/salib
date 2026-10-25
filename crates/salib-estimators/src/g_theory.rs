@@ -23,9 +23,9 @@
 //! from whatever components it is given.
 //!
 //! [`bootstrap_g_theory_pir`] reports Tong & Brennan component standard errors
-//! with Brennan's exact bias correction, parametric-bootstrap intervals for
-//! the components and Phi, and a closed-form F interval for G. Their
-//! calibration is established only where salib's coverage study says so. [crolib](https://github.com/antimemeai/crolib) develops
+//! with Brennan's exact bias correction, Satterthwaite component intervals, a
+//! closed-form F interval for G and a parametric-bootstrap interval for Phi.
+//! Their calibration is established only where salib's coverage study says so. [crolib](https://github.com/antimemeai/crolib) develops
 //! G-theory beyond this module: designs, fitting, uncertainty and allocation.
 
 #![allow(
@@ -39,7 +39,8 @@ use std::fmt;
 use ndarray::{Array3, ArrayView3};
 use rand::RngCore;
 use salib_core::RngState;
-use statrs::distribution::{ContinuousCDF, FisherSnedecor};
+use statrs::distribution::{ChiSquared, ContinuousCDF, FisherSnedecor};
+use statrs::function::gamma::ln_gamma;
 
 use crate::bootstrap::percentile_value;
 use crate::bootstrap_given_data::BootstrapGivenDataError;
@@ -300,15 +301,13 @@ impl GTheoryResult {
         self.bootstrap.as_ref()?.g_coefficient_ci
     }
 
-    /// Interval for Phi from [`GTheoryBootstrap::phi_coefficient_ci`], only
-    /// when this result's Phi is available. That interval describes the
-    /// clipped estimator, which equals an available Phi.
+    /// Interval for Phi from [`GTheoryBootstrap::phi_coefficient_ci`], whenever
+    /// it exists. It is an interval for the parameter, so it does not depend on
+    /// whether this result's own Phi is available. Read
+    /// [`bootstrap_g_theory_pir`] for where it is reliable.
     #[must_use]
     pub fn phi_coefficient_interval(&self) -> Option<(f64, f64)> {
-        self.phi_coefficient
-            .is_ok()
-            .then(|| self.bootstrap.as_ref()?.phi_coefficient_ci)
-            .flatten()
+        self.bootstrap.as_ref()?.phi_coefficient_ci
     }
 
     /// Components in [`GTheoryComponent::ALL`] order.
@@ -925,6 +924,95 @@ fn quantile_by_bisection(cdf: impl Fn(f64) -> f64, prob: f64) -> Option<f64> {
     (high > 0.0).then_some(high)
 }
 
+/// χ² cdf that stays accurate near zero. statrs' `ChiSquared::cdf` returns
+/// exactly 0 for every x ≤ 1e-20 (and its `Gamma::cdf` panics once x/2
+/// underflows), but matches 60-digit values to about 1e-15 from x = 1e-10 up.
+/// Below 1e-10 the lower regularized gamma series
+/// `P(a, y) = y^a e^(-y)/Γ(a+1) · Σ_k y^k/((a+1)…(a+k))`, with a = ν/2 and
+/// y = x/2, converges within three terms.
+fn chi_square_cdf(chi: &ChiSquared, nu: f64, x: f64) -> f64 {
+    if x <= 0.0 {
+        return 0.0;
+    }
+    if x >= 1e-10 {
+        return chi.cdf(x);
+    }
+    let (a, y) = (nu / 2.0, x / 2.0);
+    let series = 1.0 + y / (a + 1.0) * (1.0 + y / (a + 2.0));
+    (a * y.ln() - y - ln_gamma(a + 1.0)).exp() * series
+}
+
+/// Satterthwaite interval for each component (Brennan, Harris & Hanson 1987,
+/// ACT RR 87-7, App. A): `[σ̂ ν/χ²_{1−α/2}(ν), σ̂ ν/χ²_{α/2}(ν)]` with
+/// `ν = 2 σ̂²/Σ_j 2 (c_j MS_j)²/df_j`, the mean squares recovered from the
+/// components through the expected-mean-square equations. `None` when
+/// `σ̂ ≤ 0`. When ν is tiny the interval can lie entirely above σ̂, and its
+/// upper bound can be infinite. Normal theory: in salib's coverage study it is calibrated for
+/// σ²(pir), and for σ²(pi), σ²(pr) and σ²(ir) with n_p ≥ 50 and a
+/// non-negligible component, but not for σ²(p), σ²(i), σ²(r) or binary data.
+fn satterthwaite_intervals(
+    components: [f64; 7],
+    sizes: [usize; 3],
+    alpha: f64,
+) -> [Option<(f64, f64)>; 7] {
+    let [p, i, r, pi, pr, ir, pir] = components;
+    let [np, ni, nr] = sizes.map(|v| v as f64);
+    let ms = [
+        pir + nr * pi + ni * pr + ni * nr * p,
+        pir + nr * pi + np * ir + np * nr * i,
+        pir + ni * pr + np * ir + np * ni * r,
+        pir + nr * pi,
+        pir + ni * pr,
+        pir + np * ir,
+        pir,
+    ];
+    let df = [
+        np - 1.0,
+        ni - 1.0,
+        nr - 1.0,
+        (np - 1.0) * (ni - 1.0),
+        (np - 1.0) * (nr - 1.0),
+        (ni - 1.0) * (nr - 1.0),
+        (np - 1.0) * (ni - 1.0) * (nr - 1.0),
+    ];
+    // Mean squares and divisor of each component's EMS estimator.
+    let terms: [(&[usize], f64); 7] = [
+        (&[0, 3, 4, 6], ni * nr),
+        (&[1, 3, 5, 6], np * nr),
+        (&[2, 4, 5, 6], np * ni),
+        (&[3, 6], nr),
+        (&[4, 6], ni),
+        (&[5, 6], np),
+        (&[6], 1.0),
+    ];
+    std::array::from_fn(|k| {
+        let (used, divisor) = terms[k];
+        let estimate = components[k];
+        let variance: f64 = used
+            .iter()
+            .map(|&j| 2.0 * (ms[j] / divisor).powi(2) / df[j])
+            .sum();
+        if !(estimate > 0.0 && variance > 0.0) {
+            return None;
+        }
+        let nu = 2.0 * estimate * estimate / variance;
+        let chi = ChiSquared::new(nu).ok()?;
+        let cdf = |x: f64| chi_square_cdf(&chi, nu, x);
+        let high = quantile_by_bisection(cdf, 1.0 - alpha / 2.0)?;
+        let upper = if cdf(f64::MIN_POSITIVE) >= alpha / 2.0 {
+            // The lower quantile is below the normal f64 range, where
+            // P(χ²_ν ≤ x) = (x/2)^(ν/2) / Γ(ν/2 + 1) to relative error O(x);
+            // solve that in logs. The bound overflows to ∞ when it should.
+            let a = nu / 2.0;
+            let ln_q = std::f64::consts::LN_2 + ((alpha / 2.0).ln() + ln_gamma(a + 1.0)) / a;
+            ((estimate * nu).ln() - ln_q).exp()
+        } else {
+            estimate * nu / quantile_by_bisection(cdf, alpha / 2.0)?
+        };
+        Some((estimate * nu / high, upper))
+    })
+}
+
 /// Results of [`bootstrap_g_theory_pir`].
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -937,12 +1025,12 @@ pub struct GTheoryBootstrap {
     /// replicates. `None` when that stream had a failed fit, or when the
     /// result's components were zeroed.
     pub component_se: [Option<f64>; 7],
-    /// Parametric-bootstrap percentile interval for each component; `None`
-    /// where failed fits make a bound unidentifiable.
+    /// Satterthwaite interval for each component; `None` when the estimate is
+    /// not positive. See [`bootstrap_g_theory_pir`] for where it is calibrated.
     pub component_ci: [Option<(f64, f64)>; 7],
     /// Closed-form F interval for G at the grid's counts; `None` when unavailable.
     pub g_coefficient_ci: Option<(f64, f64)>,
-    /// Parametric-bootstrap percentile interval for the clipped Phi estimator.
+    /// Parametric-bootstrap percentile interval for Phi.
     pub phi_coefficient_ci: Option<(f64, f64)>,
     /// Draws per stream: three facet streams and one parametric stream.
     pub n_resamples: usize,
@@ -958,29 +1046,37 @@ pub struct GTheoryBootstrap {
 
 /// Bootstrap standard errors and intervals for the components, G and Phi.
 ///
-/// Four procedures, each matched to the evidence for it (salib #5; research
-/// notes `papers/2026-10-23-gtheory-bootstrap-performance.md` and
-/// `papers/2026-10-23-pigeonhole-bootstrap-theory.md`):
+/// Each quantity uses the procedure the evidence supports (salib #5). The
+/// coverage study (90 cells, n_sim 1900, `papers/2026-10-25-g-theory-coverage-study.md`)
+/// scopes every claim below.
 ///
 /// - **Component standard errors.** Each component resamples one facet,
-///   chosen by [`g_theory_resampling_plan`] (Tong & Brennan, CASMA 5/15). Each
-///   replicate is corrected with Brennan's CASMA 21 formula, so the corrected
-///   replicates centre exactly on the observed estimates, and the standard
-///   error is their SD. Tong & Brennan validated these standard errors for
-///   normal data at 100 × 20 × 2 only; with few rater levels the rater
-///   standard error is too small (SD ratio about 0.6–0.8 at 20 × 8 × 2–4).
-/// - **Component intervals.** Parametric bootstrap: the point components,
-///   with negatives zeroed, generate normal effect arrays at the grid's
-///   counts. Each array is refitted, and the interval is the percentile range
-///   of the signed replicate estimates.
+///   chosen by [`g_theory_resampling_plan`] (Tong & Brennan, CASMA 5/15), and
+///   each replicate is corrected with Brennan's CASMA 21 formula, so the
+///   corrected replicates centre exactly on the observed estimates. The
+///   standard error is their SD. In the study, the SE ratio to the true SD has
+///   a median of 0.96–1.00 for every component on normal data. On binary data
+///   the interaction standard errors are too small (0.57–0.84).
+/// - **Component intervals.** Satterthwaite, closed form (see
+///   `satterthwaite_intervals` in the source). Calibrated for σ²(pir) on
+///   normal data, and for σ²(pi), σ²(pr) and σ²(ir) with n_p ≥ 50 when the
+///   component is not near zero. Not calibrated for σ²(p) (37/90 cells),
+///   σ²(i), σ²(r) or binary data. It replaced parametric-bootstrap
+///   percentiles, which sat too low for every component.
 /// - **G interval.** Closed-form F interval from the observed mean squares
-///   (see `g_f_interval` in the source). It holds at the grid's counts only.
-/// - **Phi interval.** Percentile interval of the clipped Phi over the
-///   parametric replicates.
+///   (see `g_f_interval` in the source), at the grid's counts only.
+///   Calibrated in 86 of 90 study cells, including all binary cells.
+/// - **Phi interval.** Parametric bootstrap: the point components, with
+///   negatives zeroed, generate normal data at the grid's counts, and the
+///   interval is the percentile range of the refitted, clipped Phi. It
+///   reproduces Jiang et al. (2022) in their own 100 × 20 × 2 condition (.960)
+///   and has median coverage .946 over the study. It is **unreliable when
+///   there are two or three raters and many persons and items** (as low as
+///   .69): the estimated rater variance is then too noisy, and the bootstrap
+///   is too narrow and too optimistic.
 ///
-/// None of these intervals is claimed to be calibrated beyond the coverage
-/// study recorded in salib's `papers/`. Non-normal data, near-zero components,
-/// facets with two or three levels and D-study counts are unsupported.
+/// Not established: D-study counts, finite universes, near-zero components,
+/// and simultaneous coverage.
 ///
 /// A failed replicate is not dropped: each percentile bound holds for any
 /// value the failed replicates could have had, and it is unavailable once
@@ -1068,12 +1164,10 @@ pub fn bootstrap_g_theory_pir(
         }
     }
 
-    // Parametric stream: normal effect arrays from the zeroed point components.
+    // Parametric stream for Phi: normal effect arrays from the zeroed point components.
     let generating = point.with_negative_components_zeroed().components();
     let scale = generating.map(f64::sqrt);
     let mut stream = child(b"g-theory/parametric");
-    let mut component_samples: Vec<Vec<f64>> =
-        (0..7).map(|_| Vec::with_capacity(n_resamples)).collect();
     let mut phi_samples = Vec::with_capacity(n_resamples);
     let mut parametric_skipped = 0usize;
     let mut phi_failed = 0usize;
@@ -1081,15 +1175,10 @@ pub fn bootstrap_g_theory_pir(
     for _ in 0..n_resamples {
         generator.fill(&mut resampled, &scale, &mut stream);
         match fit_replicate(resampled.view(), design) {
-            Ok(fit) => {
-                for (samples, value) in component_samples.iter_mut().zip(fit.components()) {
-                    samples.push(value);
-                }
-                match fit.with_negative_components_zeroed().phi_coefficient {
-                    Ok(phi) => phi_samples.push(phi),
-                    Err(_) => phi_failed += 1,
-                }
-            }
+            Ok(fit) => match fit.with_negative_components_zeroed().phi_coefficient {
+                Ok(phi) => phi_samples.push(phi),
+                Err(_) => phi_failed += 1,
+            },
             Err(_) => parametric_skipped += 1,
         }
     }
@@ -1099,9 +1188,7 @@ pub fn bootstrap_g_theory_pir(
     Ok(GTheoryBootstrap {
         plan,
         component_se,
-        component_ci: std::array::from_fn(|k| {
-            bounded_percentiles(&component_samples[k], parametric_skipped, alpha)
-        }),
+        component_ci: satterthwaite_intervals(point.components(), sizes, alpha),
         g_coefficient_ci: g_f_interval(point.components(), sizes, alpha),
         phi_coefficient_ci: bounded_percentiles(
             &phi_samples,
@@ -1600,6 +1687,44 @@ mod tests {
         }
     }
 
+    mod sage_satterthwaite_oracle {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/oracles/g_theory_satterthwaite.rs"
+        ));
+    }
+
+    /// Pinned against 50-digit χ² quantiles computed in Sage, including a tiny-ν
+    /// case whose lower quantile is deep in the tail.
+    #[test]
+    fn satterthwaite_matches_high_precision_oracle() {
+        let mut worst = 0.0_f64;
+        for case in sage_satterthwaite_oracle::SATTERTHWAITE_CASES {
+            let got = satterthwaite_intervals(case.components, case.sizes, case.alpha);
+            for (k, (g, e)) in got.iter().zip(case.intervals).enumerate() {
+                match (g, e) {
+                    (None, None) => {}
+                    (Some(g), Some(e)) => {
+                        for (a, b) in [(g.0, e.0), (g.1, e.1)] {
+                            if a == b {
+                                continue;
+                            }
+                            let rel = (a - b).abs() / b.abs();
+                            worst = worst.max(rel);
+                            assert!(
+                                rel <= 1e-9,
+                                "{:?} component {k}: got {g:?}, exact {e:?}",
+                                case.sizes
+                            );
+                        }
+                    }
+                    _ => panic!("{:?} component {k}: got {g:?}, exact {e:?}", case.sizes),
+                }
+            }
+        }
+        eprintln!("worst relative error {worst:e}");
+    }
+
     #[test]
     fn resampling_plan_follows_tong_brennan_rules() {
         use GTheoryFacet::{I, P, R};
@@ -1735,7 +1860,9 @@ mod tests {
         let second =
             bootstrap_g_theory_pir(grid().view(), GTheoryDesign::Crossed, 64, 0.05, &mut a)
                 .unwrap();
-        assert_ne!(first.component_ci, second.component_ci);
+        // Component intervals are closed form; the stochastic outputs differ.
+        assert_eq!(first.component_ci, second.component_ci);
+        assert_ne!(first.component_se, second.component_se);
     }
 
     #[test]

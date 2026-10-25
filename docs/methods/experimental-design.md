@@ -161,14 +161,18 @@ let boot = result.bootstrap.as_ref().unwrap();
 println!("SE(p) = {:?}, G in {:?}", boot.component_se[0], result.g_coefficient_interval());
 ```
 
-Each quantity uses the procedure the evidence supports (salib #5):
+Each quantity uses the procedure the evidence supports (salib #5). A 90-cell coverage study (n_sim 1900, normal and binary data; `papers/2026-10-25-g-theory-coverage-study.md`) scopes every claim:
 
-- **Component standard errors** follow Tong & Brennan's single-facet plans. Each component is resampled on its own facet, or for an interaction on its largest facet, and each replicate is corrected with Brennan's (2006) CASMA 21 formula. The corrected replicates then centre exactly on the estimate, conditional on the data; Sage enumeration of every resample confirms this. The resampling-all-facets plan of salib 0.3.0 was biased: in a 20 × 8 × 4 simulation with all components 1, replicates sat +0.33 above the estimate for $\sigma^2_p$ and −0.38 below it for $\sigma^2_{pir}$. Even after correction, its standard errors were 2–30× too large.
-- **Component intervals** use a parametric bootstrap. The point estimate, with negatives zeroed, generates normal data at the grid's counts, and the interval is the percentile range of the refitted signed estimates.
-- **The G interval** is closed form: $(1-\hat G)/(1-G) \approx F(\hat\nu, n_p - 1)$, with a Satterthwaite $\hat\nu$. It holds at the G-study counts only and is clipped to $[0, 1]$.
-- **The Phi interval** is a parametric-bootstrap percentile interval for the clipped Phi. It is attached to a result only when that result's Phi is available.
+| Quantity | Procedure | Established |
+|---|---|---|
+| Component standard errors | Tong & Brennan single-facet plans, each replicate corrected with Brennan's (2006) CASMA 21 formula. The corrected replicates centre exactly on the estimate, conditional on the data, confirmed by Sage enumeration of every resample. | SE/true-SD ratio median 0.96–1.00 for every component on normal data. Interaction SEs are too small on binary data. |
+| Component intervals | Satterthwaite, closed form | Calibrated for $\sigma^2_{pir}$ on normal data, and for $\sigma^2_{pi}$, $\sigma^2_{pr}$, $\sigma^2_{ir}$ with $n_p \ge 50$ when the component is not near zero. Not calibrated for $\sigma^2_p$, $\sigma^2_i$, $\sigma^2_r$ or binary data. With tiny $\nu$ the interval can lie above the estimate, and its upper bound can be infinite. |
+| $E\rho^2$ (G) | Closed form: $(1-\hat G)/(1-G) \approx F(\hat\nu, n_p - 1)$, Satterthwaite $\hat\nu$, clipped to $[0, 1]$, at the G-study counts | Calibrated in 86 of 90 cells, including all binary cells |
+| $\Phi$ | Parametric bootstrap from the zeroed estimate; percentile interval | Reproduces Jiang et al. (2022) in their own condition (.960); median .946 across the study. **Unreliable with two or three raters and many persons and items** (as low as .69): the estimated rater variance is too noisy and the bootstrap too optimistic. |
 
-A failed replicate is not dropped: each bound holds for any value it could have taken, and it is omitted when failures reach the tail fraction. Calibration is claimed only for the cells of the coverage study in `papers/` (see "G-theory coverage study"). Non-normal data, near-zero components, facets with two or three levels, D-study counts and finite universes are not established. For those, see [crolib](https://github.com/antimemeai/crolib).
+salib 0.3.0 resampled persons, items and raters together. That plan was biased (+0.33 for $\sigma^2_p$ and −0.38 for $\sigma^2_{pir}$ at 20 × 8 × 4), and in the study it covered $\sigma^2_{pir}$ as rarely as 13% of the time.
+
+Coefficient intervals are intervals for the parameters, so they attach to a result whether or not its own signed coefficient is available. A failed bootstrap replicate is not dropped: each bound holds for any value it could have taken. D-study counts, finite universes, near-zero components and simultaneous coverage are not established. For those, see [crolib](https://github.com/antimemeai/crolib).
 
 Use a D-study to estimate how reliability would change with more or fewer
 items and raters, using variance components from an existing G-study.
