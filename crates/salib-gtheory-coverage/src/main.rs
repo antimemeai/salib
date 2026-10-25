@@ -3,7 +3,7 @@
 //! Design: `journal/2026-10-23-g-theory-bootstrap-plan.md`. Each cell fixes
 //! facet sizes, true components and a data distribution; each replication
 //! draws one dataset, fits it, and runs `bootstrap_g_theory_pir`. Data come
-//! from this crate's own generator, independent of salib's parametric one.
+//! from this crate's own generator, independent of salib's code.
 //! Seeds derive from (cell, replication), so any run reproduces its datasets.
 //!
 //! Usage: `salib-gtheory-coverage <smoke|full> <n_sim> <B> <out.md> [threads]`;
@@ -399,7 +399,7 @@ fn replicate(cell: &Cell, rep: usize, b: usize) -> Result<Rep, Box<dyn Error + S
         phi_clipped: clipped.phi_coefficient.ok(),
         phi_ci: boot.phi_coefficient_ci,
         base,
-        failures: boot.facet_skipped.iter().sum::<usize>() + boot.parametric_skipped,
+        failures: boot.facet_skipped.iter().sum::<usize>(),
     })
 }
 
@@ -558,7 +558,9 @@ fn report_cell(out: &mut String, cell: &Cell, reps: &[Rep]) {
         out,
         cell,
         "Phi",
-        "parametric",
+        // salib's Phi interval: fiducial GPQ since salib #10; the 2026-10-25
+        // study ran before that and these rows were the parametric bootstrap.
+        "salib (fiducial)",
         phit,
         &summarize(phit, &pick(&|r| r.phi_ci), &phi_points),
         "",
