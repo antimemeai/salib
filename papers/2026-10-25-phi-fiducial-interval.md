@@ -3,7 +3,8 @@
 ## Question
 
 The parametric-bootstrap Phi interval shipped with #5 undercovers when raters
-are few and persons and items many. Coverage reaches .696 at 200 × 20 × 2, and
+are few and persons and items many. Coverage reaches .696 at 200 × 20 × 2 in
+the Phi experiment (.694 is the minimum in the 90-cell study), and
 the misses lie almost all above the truth (`2026-10-25-g-theory-coverage-study.md`,
 "Phi experiment"). The diagnosis was plug-in error. With one or two rater
 degrees of freedom, σ̂²(r) and σ̂²(ir) are noisy and often zero, and the
@@ -29,8 +30,9 @@ general balanced mixed models.
 The mean squares are complete sufficient for the variance components here, so
 this FGPQ is the natural one. Unlike the bootstrap, it carries the uncertainty
 of every mean square, including a 1-df rater mean square. With two raters,
-σ²(r)'s own 95% interval spans a factor of about 5000 (the χ²₁ quantiles are
-.00098 and 5.02), so Phi's lower bound is far from Φ̂. It also refits no data,
+the 95% fiducial interval for the rater mean square's expectation spans a
+factor of about 5000 (the χ²₁ quantiles are .00098 and 5.02), so Phi's lower
+bound is far from Φ̂. It also refits no data,
 so it is far cheaper than the bootstrap.
 
 Related evidence: Ionan et al. (2014, BMC Med Res Methodol 14:121) find GCI
@@ -62,20 +64,30 @@ Raw rows:
 | fiducial GPQ, calibrated levels | 25/90 | .808 / .928 / .953 | .031 | .050 |
 
 The chosen interval's two-sided coverage on normal data is .938–.967 in all
-81 cells (median .952), and .918–.947 in the 9 binary cells. It fails the
-strict criterion only on tail balance. It falls below Phi in about 4% of
-samples and above it in under 1%. The lower bound is therefore conservative,
-and the upper bound behaves like a 96% one-sided bound.
+81 cells (median .952). 10 of those cells fall outside the [.94, .96] band;
+the rest fail on tail balance. The 9 binary cells cover .918–.947, and 5 fall
+below the band.
+
+The misses are lopsided. Averaged over the normal cells, the interval lies
+below Phi in 4.3% of samples and above it in 0.6%. Per cell:
+
+- **Below Phi: 2.4–6.0%.** The upper bound works as a one-sided bound of
+  94–97.6%.
+- **Above Phi: 0–2.8%.** The lower bound is conservative in most cells. In
+  some large-n_p, two- or three-rater cells it is only about nominal:
+  200×20×2 high-G (2.3%) and 200×20×3 high-G (2.8%).
+
+On binary data the interval lies below Phi in 4.7–8.1% of samples.
 
 In the cells where the bootstrap failed:
 
 | Cell | Bootstrap coverage / width | Fiducial coverage / width |
 |---|---|---|
-| 200×20×2 high-G | .696 / .192 | .947 / .790 |
-| 200×20×2 all-one | .798 / .356 | .953 / .588 |
-| 200×20×3 high-G | .798 / .122 | .942 / .469 |
-| 200×8×2 high-G | .814 / .193 | .965 / .781 |
-| 50×20×2 high-G | .846 / .223 | .956 / .799 |
+| 200×20×2 high-G | .696 / .192 | .948 / .790 |
+| 200×20×2 all-one | .798 / .356 | .953 / .586 |
+| 200×20×3 high-G | .798 / .122 | .943 / .469 |
+| 200×8×2 high-G | .814 / .193 | .964 / .775 |
+| 50×20×2 high-G | .846 / .223 | .958 / .799 |
 | 20×20×3 all-one (control) | .953 / .579 | .950 / .664 |
 
 The bootstrap's widths come from the 2026-10-25 Phi experiment, which used
@@ -100,8 +112,9 @@ different datasets.
 - **Components.** Fiducial component intervals pass 73–85 of 90 for every
   component. The shipped Satterthwaite intervals pass 0–77 (σ²(r): 75/90
   against 0/90). This is salib #12.
-- **Binary data.** All normal-theory intervals undercover on binary data for
-  σ²(pi), σ²(pr) and σ²(pir), at .69–.91.
+- **Binary data.** The fiducial component intervals undercover on binary
+  data for σ²(pi), σ²(pr) and σ²(pir), at .69–.91. Satterthwaite also fails
+  on these cells.
 
 ## Verification
 

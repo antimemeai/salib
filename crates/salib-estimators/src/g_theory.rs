@@ -1120,11 +1120,13 @@ pub struct GTheoryBootstrap {
 ///   plug-in bootstrap it carries the uncertainty of every mean square,
 ///   including a rater mean square with one or two degrees of freedom, so it
 ///   is wide when raters are few. On normal data its two-sided coverage is
-///   .938–.967 in all 81 study cells (median .952), but its misses are
-///   one-sided: the interval lies below Phi in about 4% of samples and above
-///   it in under 1%. The lower bound is therefore conservative and the upper
-///   bound is roughly a 96% one-sided bound. On binary data coverage is
-///   .918–.947 (salib #10, `papers/2026-10-25-phi-fiducial-interval.md`).
+///   .938–.967 in all 81 study cells (median .952). Its misses are lopsided:
+///   per cell, the interval lies below Phi in 2.4–6.0% of samples and above
+///   it in 0–2.8% (4.3% and 0.6% on average). The lower bound is usually
+///   conservative but only about nominal in some large-n_p, few-rater cells.
+///   The upper bound behaves as a 94–97.6% one-sided bound. On binary data
+///   coverage is .918–.947 (salib #10,
+///   `papers/2026-10-25-phi-fiducial-interval.md`).
 ///
 /// Not established: D-study counts, finite universes, near-zero components,
 /// and simultaneous coverage.
@@ -1142,7 +1144,8 @@ pub struct GTheoryBootstrap {
 /// # Errors
 ///
 /// Returns [`GTheoryBootstrapError`] if the original grid or arguments are
-/// invalid, or if every draw of a stream fails.
+/// invalid, or if every draw of a facet stream fails. When every fiducial Phi
+/// draw is 0/0 (all components zero), the Phi interval is `None`.
 pub fn bootstrap_g_theory_pir(
     grid: ArrayView3<'_, f64>,
     design: GTheoryDesign,
@@ -2143,19 +2146,91 @@ mod tests {
     /// the estimates (Hannig et al.'s FGPQ2: R(s, s) = θ).
     #[test]
     fn fiducial_quantity_at_its_centre_returns_the_estimates() {
-        let fit = estimate_g_theory_pir(grid().view(), GTheoryDesign::Crossed).unwrap();
-        let c = fit.components();
-        let sizes = [2, 2, 2];
+        // Unequal counts, so a divisor taken from the wrong facet shows.
+        let c = [0.8, 0.3, 0.2, 1.0, 0.4, 0.3, 1.0];
+        let sizes = [7, 5, 3];
         let df = degrees_of_freedom(sizes);
         let back = fiducial_components(&expected_mean_squares(&c, sizes), &df, &df, sizes);
         for k in 0..7 {
             assert!(
-                (back[k] - c[k]).abs() <= 1e-12 * 50.0,
+                (back[k] - c[k]).abs() <= 1e-14,
                 "{k}: {} vs {}",
                 back[k],
                 c[k]
             );
         }
+    }
+
+    /// Replays the documented fiducial stream at unequal counts. The
+    /// components come from Gaussian elimination on the EMS coefficient
+    /// matrix, and Phi from its definition with items and raters named, so
+    /// a wrong inversion or swapped counts in the library would show.
+    #[test]
+    fn phi_interval_replays_the_fiducial_stream() {
+        let (np, ni, nr) = (6, 4, 3);
+        let sizes = [np, ni, nr];
+        let data = Array3::from_shape_fn((np, ni, nr), |(p, i, r)| {
+            ((3 * p * p + 7 * i + 5 * r * r + 2 * p * i * r) % 13) as f64
+        });
+        let seed = RngState::from_seed([0x39; 32]);
+        let mut rng = seed.clone();
+        let (m, alpha) = (400, 0.1);
+        let boot = bootstrap_g_theory_pir(data.view(), GTheoryDesign::Crossed, m, alpha, &mut rng)
+            .unwrap();
+        let point = estimate_g_theory_pir(data.view(), GTheoryDesign::Crossed)
+            .unwrap()
+            .components();
+        let ms = expected_mean_squares(&point, sizes);
+        let df = degrees_of_freedom(sizes);
+        // Column k of the EMS map is the image of the k-th unit component.
+        let columns: Vec<[f64; 7]> = (0..7)
+            .map(|k| {
+                let mut e = [0.0; 7];
+                e[k] = 1.0;
+                expected_mean_squares(&e, sizes)
+            })
+            .collect();
+        let solve = |rhs: [f64; 7]| -> [f64; 7] {
+            let mut a: Vec<[f64; 8]> = (0..7)
+                .map(|j| std::array::from_fn(|k| if k < 7 { columns[k][j] } else { rhs[j] }))
+                .collect();
+            for col in 0..7 {
+                let pivot = (col..7)
+                    .max_by(|&x, &y| a[x][col].abs().total_cmp(&a[y][col].abs()))
+                    .unwrap();
+                a.swap(col, pivot);
+                for row in 0..7 {
+                    if row != col {
+                        let f = a[row][col] / a[col][col];
+                        for k in col..8 {
+                            a[row][k] -= f * a[col][k];
+                        }
+                    }
+                }
+            }
+            std::array::from_fn(|k| a[k][7] / a[k][k])
+        };
+        let nonce = seed.clone().into_chacha().next_u64().to_le_bytes();
+        let mut stream = seed
+            .fork(&[b"g-theory/fiducial".as_slice(), &nonce].concat())
+            .into_chacha();
+        let (fi, fr) = (ni as f64, nr as f64);
+        let phis: Vec<f64> = (0..m)
+            .map(|_| {
+                let pivots = df.map(|d| chi_square(d, &mut stream));
+                let c =
+                    solve(std::array::from_fn(|j| ms[j] * df[j] / pivots[j])).map(|v| v.max(0.0));
+                let [p, i, r, pi, pr, ir, pir] = c;
+                let absolute_error = i / fi + r / fr + pi / fi + pr / fr + (ir + pir) / (fi * fr);
+                p / (p + absolute_error)
+            })
+            .collect();
+        let want = bounded_percentiles(&phis, 0, alpha).unwrap();
+        let got = boot.phi_coefficient_ci.unwrap();
+        assert!(
+            (got.0 - want.0).abs() <= 1e-12 && (got.1 - want.1).abs() <= 1e-12,
+            "{got:?} vs {want:?}"
+        );
     }
 
     mod sage_fiducial_oracle {
