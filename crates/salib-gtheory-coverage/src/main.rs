@@ -9,6 +9,8 @@
 //! Usage: `salib-gtheory-coverage <smoke|full> <n_sim> <B> <out.md> [threads]`.
 //! `smoke` checks the harness only and is not evidence.
 
+mod phi;
+
 use std::error::Error;
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -576,6 +578,9 @@ fn report_cell(out: &mut String, cell: &Cell, reps: &[Rep]) {
 
 fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("phi") {
+        return phi::run(&args);
+    }
     let usage = "usage: salib-gtheory-coverage <smoke|full> <n_sim> <B> <out.md> [threads] [first_cell] [end_cell]";
     if args.len() < 5 {
         return Err(usage.into());

@@ -327,3 +327,42 @@ study:
 
 Decisions wait for the full study; `scripts/summarize-coverage.py` produces
 the summary from the harness output.
+
+## Phi experiment (2026-10-25)
+
+The parametric Phi interval failed the study (14/90 cells pass). The failures
+are one-sided: in cells with many persons and items but two or three raters
+the interval lies entirely above the truth, e.g. 200×20×2 high-G at .694
+coverage with 31% misses above. Bias-eliminated coverage is no better, so
+the interval is too narrow rather than off-centre. The operator asked for
+diagnosis before any decision.
+
+**Hypothesis (inference).** Φ's sampling variability is dominated by σ²(r)
+and σ²(ir), estimated on 1–2 rater degrees of freedom. A parametric bootstrap
+treats the estimated components as truth, so an underestimated (often
+zeroed) rater variance yields bootstrap data with too little rater
+variation.
+
+**Experiments.** n_sim = 1900, B = 999, 16 threads on neuroses.
+- **Fidelity:** Jiang et al.'s (2022) own normal condition, 100×20×2 with
+  σ² = (16, 4, 1, 64, 2, 3, 144) for (p, i, r, pi, pr, ir, pir). They report
+  .952 coverage but do not state how the interval was constructed.
+- **Generating values:**
+  - zeroed ANOVA estimates (current);
+  - the true components, as an oracle. Not a method: it isolates the
+    plug-in effect the hypothesis names.
+- **Interval constructions:** percentile (current); basic (reverse
+  percentile, 2Φ̂ − q); bias-corrected percentile.
+- **Cells:** the Jiang cell; the five worst study cells (200×20×2 high-G and
+  all-one, 200×20×3 high-G, 200×8×2 high-G, 50×20×2 high-G); and two control
+  cells where the parametric Phi interval passed.
+
+**Reading the results.**
+- If oracle generating values restore coverage, the hypothesis holds, and
+  the fix must propagate uncertainty in the rater components.
+- If the Jiang cell covers about .95 with the current method, the method
+  works where it was evaluated and the study maps its limits.
+- If a construction fixes the failing cells, prefer it.
+
+REML generating values are not tested: salib has no constrained likelihood
+fit.
