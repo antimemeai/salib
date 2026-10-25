@@ -85,3 +85,49 @@ fn sobol_g_matches_exact_decomposition() {
         }
     }
 }
+
+/// Ishigami value and gradient against Sage's symbolic derivation at fixed
+/// points. Each output is a few operations on libm sin/cos (each within an
+/// ulp or so), so it lands within 16ε times the sum of its absolute terms.
+#[test]
+fn ishigami_value_and_gradient_match_symbolic_derivation() {
+    for p in oracle::ISHIGAMI_POINTS {
+        let tag = format!("a={} b={} x={:?}", p.a, p.b, p.x);
+        let within = |name: &str, got: f64, exact: f64, scale: f64| {
+            assert!(
+                (got - exact).abs() <= 16.0 * f64::EPSILON * scale,
+                "{tag} {name}: got {got:e}, exact {exact:e}"
+            );
+        };
+        within(
+            "f",
+            ishigami::ishigami_with_params(&p.x, p.a, p.b),
+            p.value,
+            p.value_scale,
+        );
+        let g = ishigami::ishigami_gradient_with_params(&p.x, p.a, p.b);
+        for (k, (got, (exact, scale))) in g
+            .iter()
+            .zip(p.gradient.iter().zip(&p.gradient_scale))
+            .enumerate()
+        {
+            within(&format!("df/dx{}", k + 1), *got, *exact, *scale);
+        }
+        if (p.a, p.b) == (ishigami::ISHIGAMI_DEFAULT_A, ishigami::ISHIGAMI_DEFAULT_B) {
+            within(
+                "f (default)",
+                ishigami::ishigami(&p.x),
+                p.value,
+                p.value_scale,
+            );
+            let g = ishigami::ishigami_gradient(&p.x);
+            for (k, (got, (exact, scale))) in g
+                .iter()
+                .zip(p.gradient.iter().zip(&p.gradient_scale))
+                .enumerate()
+            {
+                within(&format!("df/dx{} (default)", k + 1), *got, *exact, *scale);
+            }
+        }
+    }
+}

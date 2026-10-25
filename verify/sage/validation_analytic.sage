@@ -135,6 +135,36 @@ for avec in g_cases:
         "    },",
     ]
 lines.append("];")
+
+# ---- Ishigami function and gradient at fixed points (derived by Sage) ----
+grad = [diff(f, v) for v in X]
+def terms(expr):
+    e = expr.expand()
+    return e.operands() if e.operator() is operator.add else [e]
+import operator
+R200 = RealField(200)
+points = [(0.3, -1.2, 2.5), (-2.9, 0.7, -0.4), (1.5707963267948966, 3.0, 3.1), (0.0, -3.14, 1.0)]
+params = [(7.0, 0.1), (5.0, 0.2), (2.0, 0.5)]
+lines += ["", "/// Ishigami value and gradient at (x1, x2, x3) for (a, b), with the sum of the",
+          "/// absolute additive terms of each output (its rounding scale).",
+          "pub struct IshigamiPoint {", "    pub a: f64,", "    pub b: f64,", "    pub x: [f64; 3],",
+          "    pub value: f64,", "    pub value_scale: f64,", "    pub gradient: [f64; 3],",
+          "    pub gradient_scale: [f64; 3],", "}", "", "pub const ISHIGAMI_POINTS: &[IshigamiPoint] = &["]
+for av, bv in params:
+    for pt in points:
+        sub = {a: exact_double(av), b: exact_double(bv), x1: exact_double(pt[0]), x2: exact_double(pt[1]), x3: exact_double(pt[2])}
+        val = lambda e: R200(e.subs(sub))
+        scale = lambda e: sum(abs(R200(t.subs(sub))) for t in terms(e))
+        lines += ["    IshigamiPoint {",
+                  # Inputs as exact bit patterns: Sage's preparser can print
+                  # fewer digits than the double it evaluated.
+                  "        a: %s," % bits(exact_double(av)), "        b: %s," % bits(exact_double(bv)),
+                  "        x: [%s]," % ", ".join(bits(exact_double(v)) for v in pt),
+                  "        value: %s," % bits(val(f)), "        value_scale: %s," % bits(scale(f)),
+                  "        gradient: [%s]," % ", ".join(bits(val(g)) for g in grad),
+                  "        gradient_scale: [%s]," % ", ".join(bits(scale(g)) for g in grad),
+                  "    },"]
+lines.append("];")
 out = os.path.join(SALIB, "crates", "salib-validation", "tests", "oracles", "analytic_indices.rs")
 os.makedirs(os.path.dirname(out), exist_ok=True)
 open(out, "w").write("\n".join(lines) + "\n")
