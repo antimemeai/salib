@@ -88,17 +88,10 @@ fn g_theory_intervals_contain_point_when_available() {
     let boot = r.bootstrap.as_ref().unwrap();
     for (k, value) in r.components().iter().enumerate() {
         let (low, high) = boot.component_ci[k].unwrap();
-        assert!(0.0 < low && low < high, "component {k}: {low} {high}");
-        // Satterthwaite contains the estimate only when ν is not tiny; it is
-        // asserted for the components the coverage study supports (pi, pr,
-        // ir, pir). With 2 occasions, σ²(r) has ν ≈ 0.007 and its interval
-        // lies above the estimate.
-        if k >= 3 {
-            assert!(
-                low < *value && *value < high,
-                "component {k}: {low} {value} {high}"
-            );
-        }
+        assert!(
+            0.0 <= low && low < *value && *value < high,
+            "component {k}: {low} {value} {high}"
+        );
         assert!(boot.component_se[k].unwrap() > 0.0);
     }
 }

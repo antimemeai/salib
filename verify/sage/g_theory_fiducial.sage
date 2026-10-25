@@ -1,4 +1,4 @@
-# Claims for salib's fiducial Phi interval (salib #10).
+# Claims for salib's fiducial component and Phi intervals (salib #10, #12).
 #
 # 1. The expected mean squares of the balanced crossed p×i×r random model are
 #    the table salib uses (`expected_mean_squares`). Derived here from the

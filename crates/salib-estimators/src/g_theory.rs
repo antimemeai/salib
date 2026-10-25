@@ -23,9 +23,9 @@
 //! from whatever components it is given.
 //!
 //! [`bootstrap_g_theory_pir`] reports Tong & Brennan component standard errors
-//! with Brennan's exact bias correction, Satterthwaite component intervals, a
-//! closed-form F interval for G and a fiducial (generalized pivotal quantity)
-//! interval for Phi.
+//! with Brennan's exact bias correction, fiducial (generalized pivotal
+//! quantity) intervals for the components and Phi, and a closed-form F
+//! interval for G.
 //! Their calibration is established only where salib's coverage study says so. [crolib](https://github.com/antimemeai/crolib) develops
 //! G-theory beyond this module: designs, fitting, uncertainty and allocation.
 
@@ -40,8 +40,7 @@ use std::fmt;
 use ndarray::{Array3, ArrayView3};
 use rand::RngCore;
 use salib_core::RngState;
-use statrs::distribution::{ChiSquared, ContinuousCDF, FisherSnedecor};
-use statrs::function::gamma::ln_gamma;
+use statrs::distribution::{ContinuousCDF, FisherSnedecor};
 
 use crate::bootstrap::percentile_value;
 use crate::bootstrap_given_data::BootstrapGivenDataError;
@@ -974,92 +973,6 @@ fn quantile_by_bisection(cdf: impl Fn(f64) -> f64, prob: f64) -> Option<f64> {
     (high > 0.0).then_some(high)
 }
 
-/// χ² cdf that stays accurate near zero. statrs' `ChiSquared::cdf` returns
-/// exactly 0 for every x ≤ 1e-20 (and its `Gamma::cdf` panics once x/2
-/// underflows), but matches 60-digit values to about 1e-15 from x = 1e-10 up.
-/// Below 1e-10 the lower regularized gamma series
-/// `P(a, y) = y^a e^(-y)/Γ(a+1) · Σ_k y^k/((a+1)…(a+k))`, with a = ν/2 and
-/// y = x/2, converges within three terms.
-fn chi_square_cdf(chi: &ChiSquared, nu: f64, x: f64) -> f64 {
-    if x <= 0.0 {
-        return 0.0;
-    }
-    if x >= 1e-10 {
-        return chi.cdf(x);
-    }
-    // ln y is taken as ln x − ln 2: x/2 rounds to 0 for the smallest subnormals.
-    let (a, y) = (nu / 2.0, x / 2.0);
-    let series = 1.0 + y / (a + 1.0) * (1.0 + y / (a + 2.0));
-    (a * (x.ln() - std::f64::consts::LN_2) - y - ln_gamma(a + 1.0)).exp() * series
-}
-
-/// Satterthwaite interval for each component (Brennan, Harris & Hanson 1987,
-/// ACT RR 87-7, App. A): `[σ̂ ν/χ²_{1−α/2}(ν), σ̂ ν/χ²_{α/2}(ν)]` with
-/// `ν = 2 σ̂²/Σ_j 2 (c_j MS_j)²/df_j`, the mean squares recovered from the
-/// components through the expected-mean-square equations. `None` when
-/// `σ̂ ≤ 0`. When ν is tiny the interval can lie entirely above σ̂, and
-/// either bound can be infinite (both, for ν below about 1e-4 at α = 0.05). Normal theory: in salib's coverage study it is calibrated for
-/// σ²(pir), and for σ²(pi), σ²(pr) and σ²(ir) with n_p ≥ 50 and a
-/// non-negligible component, but not for σ²(p), σ²(i), σ²(r) or binary data.
-fn satterthwaite_intervals(
-    components: [f64; 7],
-    sizes: [usize; 3],
-    alpha: f64,
-) -> [Option<(f64, f64)>; 7] {
-    // The intervals are scale-equivariant. They are solved at unit scale,
-    // where the mean squares stay finite, with ν formed from ratios so that
-    // no square under- or overflows; the bounds are then scaled back.
-    let exponent = unit_exponent(&components);
-    let components = components.map(|c| scale_by_pow2(c, -exponent));
-    let [np, ni, nr] = sizes.map(|v| v as f64);
-    let ms = expected_mean_squares(&components, sizes);
-    let df = degrees_of_freedom(sizes);
-    // Mean squares and divisor of each component's EMS estimator.
-    let terms: [(&[usize], f64); 7] = [
-        (&[0, 3, 4, 6], ni * nr),
-        (&[1, 3, 5, 6], np * nr),
-        (&[2, 4, 5, 6], np * ni),
-        (&[3, 6], nr),
-        (&[4, 6], ni),
-        (&[5, 6], np),
-        (&[6], 1.0),
-    ];
-    std::array::from_fn(|k| {
-        let (used, divisor) = terms[k];
-        let estimate = components[k];
-        if estimate <= 0.0 {
-            return None;
-        }
-        // ν = 2σ̂²/Σ_j 2(MS_j/d)²/df_j.
-        let nu = 1.0
-            / used
-                .iter()
-                .map(|&j| (ms[j] / (divisor * estimate)).powi(2) / df[j])
-                .sum::<f64>();
-        if !nu.is_finite() {
-            return None;
-        }
-        let chi = ChiSquared::new(nu).ok()?;
-        let cdf = |x: f64| chi_square_cdf(&chi, nu, x);
-        // A χ² quantile below the normal f64 range is solved in logs from
-        // P(χ²_ν ≤ x) = (x/2)^(ν/2) / Γ(ν/2 + 1), exact to relative error O(x)
-        // there; the bound σ̂ν/q then overflows to ∞ when it should.
-        let bound = |prob: f64| -> Option<f64> {
-            if cdf(f64::MIN_POSITIVE) >= prob {
-                let a = nu / 2.0;
-                let ln_q = std::f64::consts::LN_2 + (prob.ln() + ln_gamma(a + 1.0)) / a;
-                Some(scale_by_pow2(((estimate * nu).ln() - ln_q).exp(), exponent))
-            } else {
-                Some(scale_by_pow2(
-                    estimate * nu / quantile_by_bisection(cdf, prob)?,
-                    exponent,
-                ))
-            }
-        };
-        Some((bound(1.0 - alpha / 2.0)?, bound(alpha / 2.0)?))
-    })
-}
-
 /// Results of [`bootstrap_g_theory_pir`].
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -1072,8 +985,10 @@ pub struct GTheoryBootstrap {
     /// replicates. `None` when that stream had a failed fit, or when the
     /// result's components were zeroed.
     pub component_se: [Option<f64>; 7],
-    /// Satterthwaite interval for each component; `None` when the estimate is
-    /// not positive. See [`bootstrap_g_theory_pir`] for where it is calibrated.
+    /// Fiducial percentile interval for each component, from the same draws as
+    /// the Phi interval. Both bounds are nonnegative, and the interval exists
+    /// whatever the sign of the estimate; `None` is not produced at present.
+    /// See [`bootstrap_g_theory_pir`] for where it is calibrated.
     pub component_ci: [Option<(f64, f64)>; 7],
     /// Closed-form F interval for G at the grid's counts; `None` when unavailable.
     pub g_coefficient_ci: Option<(f64, f64)>,
@@ -1103,23 +1018,30 @@ pub struct GTheoryBootstrap {
 ///   standard error is their SD. In the study, the SE ratio to the true SD has
 ///   a median of 0.96–1.00 for every component on normal data. On binary data
 ///   the interaction standard errors are too small (0.57–0.84).
-/// - **Component intervals.** Satterthwaite, closed form (see
-///   `satterthwaite_intervals` in the source). Calibrated for σ²(pir) on
-///   normal data, and for σ²(pi), σ²(pr) and σ²(ir) with n_p ≥ 50 when the
-///   component is not near zero. Not calibrated for σ²(p) (37/90 cells),
-///   σ²(i), σ²(r) or binary data. It replaced parametric-bootstrap
-///   percentiles, which sat too low for every component.
+/// - **Fiducial draws.** The component and Phi intervals share one stream of
+///   fiducial generalized pivotal quantity draws (Hannig, Iyer & Patterson
+///   2006): each draw replaces every mean square `MS_j` by `MS_j df_j / U_j`
+///   with `U_j ~ χ²(df_j)`, solves the expected-mean-square equations and
+///   clips the components at zero. An interval is the percentile range of the
+///   draws, so its bounds carry Monte Carlo error from `n_resamples`; the
+///   study used 9999 draws. No data are refitted. Unlike a plug-in bootstrap the draws carry the uncertainty
+///   of every mean square, including a rater mean square with one or two
+///   degrees of freedom, so the intervals are wide when raters are few.
+/// - **Component intervals.** Percentiles of each clipped component. An
+///   interval exists for a zero or negative estimate too, and then usually
+///   starts at 0. On normal data each component passes the study criterion in
+///   72–80 of 81 cells, with two-sided coverage .933–.968 and each tail miss
+///   .008–.038 per cell, including the near-zero σ²(r), σ²(pr) and σ²(ir) of
+///   the near-zero-rater cells. On binary data σ²(pi), σ²(pr) and σ²(pir)
+///   undercover (.69–.91), and σ²(p) covers .916–.950 (salib #12,
+///   `papers/2026-10-25-component-fiducial-intervals.md`). They replaced
+///   Satterthwaite intervals, which gave no interval for a nonpositive
+///   estimate and failed for σ²(i) and σ²(r).
 /// - **G interval.** Closed-form F interval from the observed mean squares
 ///   (see `g_f_interval` in the source), at the grid's counts only.
 ///   Calibrated in 86 of 90 study cells, including all binary cells.
-/// - **Phi interval.** Fiducial generalized pivotal quantity (Hannig, Iyer &
-///   Patterson 2006): each draw replaces every mean square `MS_j` by
-///   `MS_j df_j / U_j` with `U_j ~ χ²(df_j)`, solves the expected-mean-square
-///   equations, clips the components at zero and evaluates Phi. The interval
-///   is the percentile range of the draws. No data are refitted. Unlike a
-///   plug-in bootstrap it carries the uncertainty of every mean square,
-///   including a rater mean square with one or two degrees of freedom, so it
-///   is wide when raters are few. On normal data its two-sided coverage is
+/// - **Phi interval.** Percentiles of Phi evaluated at each clipped draw.
+///   On normal data its two-sided coverage is
 ///   .938–.967 in all 81 study cells (median .952). Its misses are lopsided:
 ///   per cell, the interval lies below Phi in 2.4–6.0% of samples and above
 ///   it in 0–2.8% (4.3% and 0.6% on average). The lower bound is usually
@@ -1128,8 +1050,8 @@ pub struct GTheoryBootstrap {
 ///   coverage is .918–.947 (salib #10,
 ///   `papers/2026-10-25-phi-fiducial-interval.md`).
 ///
-/// Not established: D-study counts, finite universes, near-zero components,
-/// and simultaneous coverage.
+/// Not established: D-study counts, finite universes, components below the
+/// study's 0.01 (beside components of 1), and simultaneous coverage.
 ///
 /// A failed replicate is not dropped: each percentile bound holds for any
 /// value the failed replicates could have had, and it is unavailable once
@@ -1145,7 +1067,8 @@ pub struct GTheoryBootstrap {
 ///
 /// Returns [`GTheoryBootstrapError`] if the original grid or arguments are
 /// invalid, or if every draw of a facet stream fails. When every fiducial Phi
-/// draw is 0/0 (all components zero), the Phi interval is `None`.
+/// draw is 0/0 (all components zero), the Phi interval is `None` and every
+/// component interval is `(0, 0)`.
 pub fn bootstrap_g_theory_pir(
     grid: ArrayView3<'_, f64>,
     design: GTheoryDesign,
@@ -1218,18 +1141,24 @@ pub fn bootstrap_g_theory_pir(
         }
     }
 
-    // Fiducial stream for Phi. Phi is scale-free, so the draws are made at
-    // unit scale, where the mean squares cannot overflow.
+    // Fiducial stream for the components and Phi. The draws are made at unit
+    // scale, where the mean squares cannot overflow; component bounds are
+    // scaled back, and Phi is scale-free.
     let exponent = unit_exponent(&point.components());
     let unit = point.components().map(|c| scale_by_pow2(c, -exponent));
     let ms = expected_mean_squares(&unit, sizes);
     let df = degrees_of_freedom(sizes);
     let mut stream = child(b"g-theory/fiducial");
+    let mut component_samples: [Vec<f64>; 7] =
+        std::array::from_fn(|_| Vec::with_capacity(n_resamples));
     let mut phi_samples = Vec::with_capacity(n_resamples);
     let mut phi_failed = 0usize;
     for _ in 0..n_resamples {
         let pivots = df.map(|d| chi_square(d, &mut stream));
         let draw = fiducial_components(&ms, &df, &pivots, sizes).map(|c| c.max(0.0));
+        for (samples, c) in component_samples.iter_mut().zip(draw) {
+            samples.push(c);
+        }
         match coefficients(&draw, sizes[1], sizes[2]).1 {
             Ok(phi) => phi_samples.push(phi),
             Err(_) => phi_failed += 1,
@@ -1238,7 +1167,10 @@ pub fn bootstrap_g_theory_pir(
     Ok(GTheoryBootstrap {
         plan,
         component_se,
-        component_ci: satterthwaite_intervals(point.components(), sizes, alpha),
+        component_ci: component_samples.map(|samples| {
+            bounded_percentiles(&samples, 0, alpha)
+                .map(|(low, high)| (scale_by_pow2(low, exponent), scale_by_pow2(high, exponent)))
+        }),
         g_coefficient_ci: g_f_interval(point.components(), sizes, alpha),
         phi_coefficient_ci: bounded_percentiles(
             &phi_samples,
@@ -1736,44 +1668,6 @@ mod tests {
         }
     }
 
-    mod sage_satterthwaite_oracle {
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/oracles/g_theory_satterthwaite.rs"
-        ));
-    }
-
-    /// Pinned against 50-digit χ² quantiles computed in Sage, including a tiny-ν
-    /// case whose lower quantile is deep in the tail.
-    #[test]
-    fn satterthwaite_matches_high_precision_oracle() {
-        let mut worst = 0.0_f64;
-        for case in sage_satterthwaite_oracle::SATTERTHWAITE_CASES {
-            let got = satterthwaite_intervals(case.components, case.sizes, case.alpha);
-            for (k, (g, e)) in got.iter().zip(case.intervals).enumerate() {
-                match (g, e) {
-                    (None, None) => {}
-                    (Some(g), Some(e)) => {
-                        for (a, b) in [(g.0, e.0), (g.1, e.1)] {
-                            if a == b {
-                                continue;
-                            }
-                            let rel = (a - b).abs() / b.abs();
-                            worst = worst.max(rel);
-                            assert!(
-                                rel <= 1e-9,
-                                "{:?} component {k}: got {g:?}, exact {e:?}",
-                                case.sizes
-                            );
-                        }
-                    }
-                    _ => panic!("{:?} component {k}: got {g:?}, exact {e:?}", case.sizes),
-                }
-            }
-        }
-        eprintln!("worst relative error {worst:e}");
-    }
-
     #[test]
     fn resampling_plan_follows_tong_brennan_rules() {
         use GTheoryFacet::{I, P, R};
@@ -1843,9 +1737,10 @@ mod tests {
         let second =
             bootstrap_g_theory_pir(grid().view(), GTheoryDesign::Crossed, 64, 0.05, &mut a)
                 .unwrap();
-        // Component intervals are closed form; the stochastic outputs differ.
-        assert_eq!(first.component_ci, second.component_ci);
+        // The G interval is closed form; the stochastic outputs differ.
+        assert_eq!(first.g_coefficient_ci, second.g_coefficient_ci);
         assert_ne!(first.component_se, second.component_se);
+        assert_ne!(first.component_ci, second.component_ci);
     }
 
     #[test]
@@ -1994,6 +1889,7 @@ mod tests {
             .unwrap();
         assert_eq!(boot.phi_coefficient_failed, 32);
         assert_eq!(boot.phi_coefficient_ci, None);
+        assert_eq!(boot.component_ci, [Some((0.0, 0.0)); 7]);
     }
 
     /// At a scale where σ²(pir) is barely normal, resamples that repeat a
@@ -2011,8 +1907,29 @@ mod tests {
             let skipped = boot.facet_skipped[boot.plan[k].axis()] > 0;
             assert_eq!(boot.component_se[k].is_none(), skipped, "component {k}");
         }
-        // Phi is scale-free and needs no refits, so its interval survives.
+        // The fiducial intervals need no refits, so they survive.
         assert!(boot.phi_coefficient_ci.is_some());
+        assert!(boot.component_ci.iter().all(Option::is_some));
+    }
+
+    /// Scaling the data by 2^k scales every component bound by exactly 2^(2k)
+    /// and leaves the Phi interval unchanged, at scales where the mean squares
+    /// would under- or overflow without working at unit scale.
+    #[test]
+    fn fiducial_intervals_do_not_depend_on_units() {
+        let run = |grid: Array3<f64>| {
+            let mut rng = RngState::from_seed([0x3a; 32]);
+            bootstrap_g_theory_pir(grid.view(), GTheoryDesign::Crossed, 50, 0.05, &mut rng).unwrap()
+        };
+        let unit = run(grid());
+        for k in [-480, 480] {
+            let scaled = run(grid().mapv(|y| scale_by_pow2(y, k)));
+            assert_eq!(scaled.phi_coefficient_ci, unit.phi_coefficient_ci, "2^{k}");
+            let want = unit
+                .component_ci
+                .map(|ci| ci.map(|(l, h)| (scale_by_pow2(l, 2 * k), scale_by_pow2(h, 2 * k))));
+            assert_eq!(scaled.component_ci, want, "2^{k}");
+        }
     }
 
     /// One resample per stream: no standard error, and the Phi interval is
@@ -2216,11 +2133,15 @@ mod tests {
             .fork(&[b"g-theory/fiducial".as_slice(), &nonce].concat())
             .into_chacha();
         let (fi, fr) = (ni as f64, nr as f64);
+        let mut components: Vec<Vec<f64>> = vec![Vec::new(); 7];
         let phis: Vec<f64> = (0..m)
             .map(|_| {
                 let pivots = df.map(|d| chi_square(d, &mut stream));
                 let c =
                     solve(std::array::from_fn(|j| ms[j] * df[j] / pivots[j])).map(|v| v.max(0.0));
+                for (samples, v) in components.iter_mut().zip(c) {
+                    samples.push(v);
+                }
                 let [p, i, r, pi, pr, ir, pir] = c;
                 let absolute_error = i / fi + r / fr + pi / fi + pr / fr + (ir + pir) / (fi * fr);
                 p / (p + absolute_error)
@@ -2232,6 +2153,17 @@ mod tests {
             (got.0 - want.0).abs() <= 1e-12 && (got.1 - want.1).abs() <= 1e-12,
             "{got:?} vs {want:?}"
         );
+        // Four of this grid's estimates are negative; their intervals exist too.
+        assert_eq!(point.iter().filter(|&&c| c < 0.0).count(), 4, "{point:?}");
+        for (k, samples) in components.iter().enumerate() {
+            let want = bounded_percentiles(samples, 0, alpha).unwrap();
+            let got = boot.component_ci[k].unwrap();
+            let close = |a: f64, b: f64| (a - b).abs() <= 1e-12 * b.abs().max(1.0);
+            assert!(
+                close(got.0, want.0) && close(got.1, want.1),
+                "component {k}: {got:?} vs {want:?}"
+            );
+        }
     }
 
     mod sage_fiducial_oracle {
@@ -2269,37 +2201,12 @@ mod tests {
         }
     }
 
-    /// Pinned against 50-digit regularized incomplete gamma values from Sage,
-    /// including the point just below statrs' range.
+    /// The G interval is scale-invariant across the whole normal range. At
+    /// 2^1022 the mean squares would overflow without working at unit scale.
     #[test]
-    fn chi_square_cdf_matches_high_precision_oracle_below_statrs_range() {
-        for &(nu, x, exact) in sage_satterthwaite_oracle::CHI_SQUARE_CDF_CASES {
-            let got = chi_square_cdf(&ChiSquared::new(nu).unwrap(), nu, x);
-            if exact == 0.0 || exact < f64::MIN_POSITIVE {
-                assert!(
-                    got <= f64::MIN_POSITIVE,
-                    "nu {nu}, x {x:e}: {got:e} vs {exact:e}"
-                );
-                continue;
-            }
-            // exp of a large negative argument carries |ln P|·ε relative error.
-            let tol = 8.0 * f64::EPSILON * (1.0 + exact.ln().abs());
-            assert!(
-                (got / exact - 1.0).abs() <= tol,
-                "nu {nu}, x {x:e}: {got:e} vs {exact:e}"
-            );
-        }
-    }
-
-    /// Both closed-form intervals are scale-equivariant: multiplying every
-    /// component by c multiplies each Satterthwaite bound by c and leaves the
-    /// G interval unchanged, across the whole normal range. At 2^1022 the
-    /// mean squares would overflow without working at unit scale.
-    #[test]
-    fn closed_form_intervals_do_not_depend_on_units() {
+    fn g_interval_does_not_depend_on_units() {
         let base = [0.5528, 0.4417, 0.0074, 0.575, 0.1009, 0.1565, 0.9352];
         let sizes = [10, 4, 2];
-        let unit_ci = satterthwaite_intervals(base, sizes, 0.05);
         let unit_g = g_f_interval(base, sizes, 0.05).unwrap();
         let close = |a: f64, b: f64| a == b || (a - b).abs() <= 1e-12 * b.abs();
         for c in [
@@ -2310,17 +2217,6 @@ mod tests {
             2.0_f64.powi(1022),
         ] {
             let scaled = base.map(|v| v * c);
-            for (k, (got, unit)) in satterthwaite_intervals(scaled, sizes, 0.05)
-                .iter()
-                .zip(unit_ci)
-                .enumerate()
-            {
-                let (got, unit) = (got.unwrap(), unit.unwrap());
-                assert!(
-                    close(got.0, unit.0 * c) && close(got.1, unit.1 * c),
-                    "scale {c:e}, component {k}: {got:?} vs {unit:?}"
-                );
-            }
             let g = g_f_interval(scaled, sizes, 0.05).unwrap();
             assert!(
                 close(g.0, unit_g.0) && close(g.1, unit_g.1),

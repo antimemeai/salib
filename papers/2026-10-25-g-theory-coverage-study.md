@@ -152,3 +152,6 @@ closed form analogous to G's F interval.
 
 **Superseded (salib #10).** The fiducial generalized pivotal quantity interval
 replaced the parametric bootstrap: `2026-10-25-phi-fiducial-interval.md`.
+
+**Superseded (salib #12).** Fiducial component intervals replaced the
+Satterthwaite intervals: `2026-10-25-component-fiducial-intervals.md`.
