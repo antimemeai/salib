@@ -2201,9 +2201,10 @@ mod tests {
                 a.swap(col, pivot);
                 for row in 0..7 {
                     if row != col {
-                        let f = a[row][col] / a[col][col];
-                        for k in col..8 {
-                            a[row][k] -= f * a[col][k];
+                        let pivot_row = a[col];
+                        let f = a[row][col] / pivot_row[col];
+                        for (x, p) in a[row].iter_mut().zip(pivot_row).skip(col) {
+                            *x -= f * p;
                         }
                     }
                 }
