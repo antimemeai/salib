@@ -144,7 +144,7 @@ fn coefficients(c: &[f64; 7], ni: f64, nr: f64) -> (f64, f64) {
 }
 
 fn open_unit(rng: &mut impl RngCore) -> f64 {
-    ((rng.next_u64() >> 11) as f64 + 0.5) / (1_u64 << 53) as f64
+    ((rng.next_u64() >> 12) as f64 + 0.5) / (1_u64 << 52) as f64
 }
 
 /// Standard normal by Box–Muller: deliberately different machinery from

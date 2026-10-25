@@ -412,6 +412,16 @@ fn binary_exponent(value: f64) -> i32 {
     }
 }
 
+/// Binary exponent of the largest component magnitude, or 0 when all are zero.
+fn unit_exponent(components: &[f64; 7]) -> i32 {
+    let max = components.iter().fold(0.0_f64, |m, c| m.max(c.abs()));
+    if max > 0.0 {
+        binary_exponent(max)
+    } else {
+        0
+    }
+}
+
 /// `value · 2^k`, exact whenever the result is a normal float.
 fn scale_by_pow2(mut value: f64, mut k: i32) -> f64 {
     let step = |k: i32| f64::from_bits(((k + 1023) as u64) << 52);
@@ -787,9 +797,11 @@ fn fit_replicate(
     }
 }
 
-/// Standard uniform on the open interval (0, 1), from 53 random bits.
+/// Standard uniform on the open interval (0, 1), from 52 random bits: the
+/// values (k + ½)·2⁻⁵² lie in [2⁻⁵³, 1 − 2⁻⁵³] and are exact. With 53 bits,
+/// k + ½ rounds up to 2⁵³ at the top word and the result would be 1.
 fn open_unit(rng: &mut impl RngCore) -> f64 {
-    ((rng.next_u64() >> 11) as f64 + 0.5) / (1_u64 << 53) as f64
+    ((rng.next_u64() >> 12) as f64 + 0.5) / (1_u64 << 52) as f64
 }
 
 /// Balanced normal random-effects arrays: seven independent effect arrays,
@@ -868,7 +880,10 @@ fn g_f_interval(components: [f64; 7], sizes: [usize; 3], alpha: f64) -> Option<(
 
 /// `(1 − Ĝ, ν̂)` for [`g_f_interval`], or `None` when `L ≤ 0`.
 fn g_f_parameters(components: [f64; 7], sizes: [usize; 3]) -> Option<(f64, f64)> {
-    let [p, _, _, pi, pr, _, pir] = components;
+    // Both outputs are scale-free. At unit scale the mean squares stay
+    // finite, and ν is formed from ratios so that no square under- or overflows.
+    let exponent = unit_exponent(&components);
+    let [p, _, _, pi, pr, _, pir] = components.map(|c| scale_by_pow2(c, -exponent));
     let (np, ni, nr) = (sizes[0] as f64, sizes[1] as f64, sizes[2] as f64);
     // Mean squares, recovered exactly from the expected-mean-square equations.
     let ms_pi = pir + nr * pi;
@@ -882,7 +897,10 @@ fn g_f_parameters(components: [f64; 7], sizes: [usize; 3]) -> Option<(f64, f64)>
     let df_pi = (np - 1.0) * (ni - 1.0);
     let df_pr = (np - 1.0) * (nr - 1.0);
     let df_pir = df_pi * (nr - 1.0);
-    let nu = l * l / (ms_pi * ms_pi / df_pi + ms_pr * ms_pr / df_pr + ms_pir * ms_pir / df_pir);
+    let nu = 1.0
+        / ((ms_pi / l).powi(2) / df_pi
+            + (ms_pr / l).powi(2) / df_pr
+            + (ms_pir / l).powi(2) / df_pir);
     (nu.is_finite() && nu > 0.0).then_some((l / ms_p, nu))
 }
 
@@ -956,6 +974,11 @@ fn satterthwaite_intervals(
     sizes: [usize; 3],
     alpha: f64,
 ) -> [Option<(f64, f64)>; 7] {
+    // The intervals are scale-equivariant. They are solved at unit scale,
+    // where the mean squares stay finite, with ν formed from ratios so that
+    // no square under- or overflows; the bounds are then scaled back.
+    let exponent = unit_exponent(&components);
+    let components = components.map(|c| scale_by_pow2(c, -exponent));
     let [p, i, r, pi, pr, ir, pir] = components;
     let [np, ni, nr] = sizes.map(|v| v as f64);
     let ms = [
@@ -989,14 +1012,18 @@ fn satterthwaite_intervals(
     std::array::from_fn(|k| {
         let (used, divisor) = terms[k];
         let estimate = components[k];
-        let variance: f64 = used
-            .iter()
-            .map(|&j| 2.0 * (ms[j] / divisor).powi(2) / df[j])
-            .sum();
-        if !(estimate > 0.0 && variance > 0.0) {
+        if estimate <= 0.0 {
             return None;
         }
-        let nu = 2.0 * estimate * estimate / variance;
+        // ν = 2σ̂²/Σ_j 2(MS_j/d)²/df_j.
+        let nu = 1.0
+            / used
+                .iter()
+                .map(|&j| (ms[j] / (divisor * estimate)).powi(2) / df[j])
+                .sum::<f64>();
+        if !nu.is_finite() {
+            return None;
+        }
         let chi = ChiSquared::new(nu).ok()?;
         let cdf = |x: f64| chi_square_cdf(&chi, nu, x);
         // A χ² quantile below the normal f64 range is solved in logs from
@@ -1006,9 +1033,12 @@ fn satterthwaite_intervals(
             if cdf(f64::MIN_POSITIVE) >= prob {
                 let a = nu / 2.0;
                 let ln_q = std::f64::consts::LN_2 + (prob.ln() + ln_gamma(a + 1.0)) / a;
-                Some(((estimate * nu).ln() - ln_q).exp())
+                Some(scale_by_pow2(((estimate * nu).ln() - ln_q).exp(), exponent))
             } else {
-                Some(estimate * nu / quantile_by_bisection(cdf, prob)?)
+                Some(scale_by_pow2(
+                    estimate * nu / quantile_by_bisection(cdf, prob)?,
+                    exponent,
+                ))
             }
         };
         Some((bound(1.0 - alpha / 2.0)?, bound(alpha / 2.0)?))
@@ -1883,5 +1913,442 @@ mod tests {
         );
         assert!(g1 > g0 && phi1 > phi0);
         assert!(g0 > phi0 && g1 > phi1);
+    }
+
+    /// Exact components of an integer grid. `N·T_x = G_x Σ_g S_g²` is an
+    /// integer for every effect x with G_x groups of sums S_g, so each
+    /// component is one correctly rounded quotient of integers.
+    fn exact_components(k: &Array3<i64>) -> [f64; 7] {
+        let (np, ni, nr) = k.dim();
+        let n = (np * ni * nr) as i128;
+        let t = |key: &dyn Fn(usize, usize, usize) -> usize, groups: usize| -> i128 {
+            let mut sums = vec![0_i128; groups];
+            for ((a, b, c), &v) in k.indexed_iter() {
+                sums[key(a, b, c)] += i128::from(v);
+            }
+            groups as i128 * sums.iter().map(|s| s * s).sum::<i128>()
+        };
+        let t0 = t(&|_, _, _| 0, 1);
+        let tp = t(&|a, _, _| a, np);
+        let ti = t(&|_, b, _| b, ni);
+        let tr = t(&|_, _, c| c, nr);
+        let tpi = t(&|a, b, _| a * ni + b, np * ni);
+        let tpr = t(&|a, _, c| a * nr + c, np * nr);
+        let tir = t(&|_, b, c| b * nr + c, ni * nr);
+        let tpir = t(&|a, b, c| (a * ni + b) * nr + c, np * ni * nr);
+        let ss = [
+            tp - t0,
+            ti - t0,
+            tr - t0,
+            tpi - tp - ti + t0,
+            tpr - tp - tr + t0,
+            tir - ti - tr + t0,
+            tpir - tpi - tpr - tir + tp + ti + tr - t0,
+        ];
+        let (fp, fi, fr) = (np as i128 - 1, ni as i128 - 1, nr as i128 - 1);
+        let df = [fp, fi, fr, fp * fi, fp * fr, fi * fr, fp * fi * fr];
+        // Every df divides fp·fi·fr, so m_j = N·D·MS_j is an integer.
+        let d = fp * fi * fr;
+        let m: Vec<i128> = ss.iter().zip(df).map(|(s, f)| s * (d / f)).collect();
+        let (pn, inn, rn) = (np as i128, ni as i128, nr as i128);
+        let numerators = [
+            (m[0] - m[3] - m[4] + m[6], inn * rn),
+            (m[1] - m[3] - m[5] + m[6], pn * rn),
+            (m[2] - m[4] - m[5] + m[6], pn * inn),
+            (m[3] - m[6], rn),
+            (m[4] - m[6], inn),
+            (m[5] - m[6], pn),
+            (m[6], 1),
+        ];
+        numerators.map(|(num, divisor)| num as f64 / (n * d * divisor) as f64)
+    }
+
+    /// Integer scores far from zero: every centred contrast must keep full
+    /// precision, and the grand mean of the centred data (not exactly zero
+    /// once the centre rounds) must enter each sum of squares with its sign.
+    #[test]
+    fn large_offset_integer_data_match_exact_components() {
+        let k = Array3::from_shape_fn((7, 5, 3), |(a, b, c)| {
+            let (a, b, c) = (a as i64, b as i64, c as i64);
+            (3 * a * a + 7 * b + 5 * c * c + 2 * a * b * c + 14 * (a + 2 * b + 3 * c + a * c)) % 17
+                - 8
+        });
+        let exact = exact_components(&k);
+        let fit = estimate_g_theory_pir(k.mapv(|v| 1e14 + v as f64).view(), GTheoryDesign::Crossed)
+            .unwrap()
+            .components();
+        for (j, (got, want)) in fit.iter().zip(exact).enumerate() {
+            assert!(
+                (got - want).abs() <= 1e-14 * want.abs(),
+                "component {j}: {got:e} vs exact {want:e}"
+            );
+        }
+    }
+
+    /// Observations two ulps either side of 1.75: σ̂²(pir) = 32ε² is below the
+    /// resolution term (4ε·max|y|)² = 49ε², so every component snaps to zero.
+    #[test]
+    fn components_within_observation_resolution_snap_to_zero() {
+        let grid = Array3::from_shape_fn((2, 2, 2), |(p, i, r)| {
+            let sign = if (p + i + r) % 2 == 0 { 1.0 } else { -1.0 };
+            1.75 + sign * 2.0 * f64::EPSILON
+        });
+        let fit = estimate_g_theory_pir(grid.view(), GTheoryDesign::Crossed).unwrap();
+        assert_eq!(fit.components(), [0.0; 7]);
+    }
+
+    /// z = a·(pi code) + ½·(pir code) with a = ½ + mε on ±1 codes, so
+    /// σ̂²(pi) = 4(a² − ¼) ≈ 4mε. The documented bound for σ²(pi) is about
+    /// 218ε here; its √M_k and K N ε M_k terms are 91ε and 128ε.
+    #[test]
+    fn snap_rule_uses_the_documented_bound() {
+        let sigma_pi = |m: f64| {
+            let a = 0.5 + m * f64::EPSILON;
+            let grid = Array3::from_shape_fn((2, 2, 2), |(p, i, r)| {
+                let [p, i, r] = [p, i, r].map(|v| if v == 0 { -1.0 } else { 1.0 });
+                a * p * i + 0.5 * p * i * r
+            });
+            let fit = estimate_g_theory_pir(grid.view(), GTheoryDesign::Crossed).unwrap();
+            let (ms_pi, ms_pir) = (8.0 * a * a, 2.0);
+            let magnitude = (ms_pi + ms_pir) / 2.0;
+            let delta = 8.0 * 8.0 * f64::EPSILON * (1.0 + m * f64::EPSILON);
+            let bound = delta * delta
+                + (4.0 * f64::EPSILON * (1.0 + m * f64::EPSILON)).powi(2)
+                + delta * magnitude.sqrt()
+                + 8.0 * 8.0 * f64::EPSILON * magnitude;
+            (fit.sigma_pi, (ms_pi - ms_pir) / 2.0, bound)
+        };
+        // Inside the bound, but above either of its two main terms alone.
+        let (got, value, bound) = sigma_pi(40.0);
+        assert!(
+            value <= bound && value > 0.73 * bound,
+            "{value:e} {bound:e}"
+        );
+        assert_eq!(got, 0.0);
+        // Just outside it, the estimate survives.
+        let (got, value, bound) = sigma_pi(60.0);
+        assert!(value > bound, "{value:e} {bound:e}");
+        assert!((got - value).abs() <= 1e-3 * value, "{got:e} {value:e}");
+    }
+
+    /// Every component snaps to zero, so the parametric data are constant and
+    /// each replicate's Phi is 0/0: counted as failed, not skipped.
+    #[test]
+    fn bootstrap_counts_undefined_phi_replicates() {
+        let grid = Array3::from_shape_fn((2, 2, 2), |(p, i, r)| {
+            let sign = if (p + i + r) % 2 == 0 { 1.0 } else { -1.0 };
+            1.75 + sign * 2.0 * f64::EPSILON
+        });
+        let mut rng = RngState::from_seed([0x31; 32]);
+        let boot = bootstrap_g_theory_pir(grid.view(), GTheoryDesign::Crossed, 32, 0.05, &mut rng)
+            .unwrap();
+        assert_eq!(boot.phi_coefficient_failed, 32);
+        assert_eq!(boot.parametric_skipped, 0);
+        assert_eq!(boot.phi_coefficient_ci, None);
+    }
+
+    /// At a scale where σ²(pir) is barely normal, resamples that repeat a
+    /// person push components below the normal range, so those fits fail.
+    /// The standard errors from a stream with failures are withheld.
+    #[test]
+    fn failed_fits_are_counted_and_withhold_standard_errors() {
+        let scale = 0.8 * 2.0_f64.powi(-511);
+        let grid = grid().mapv(|y| y * scale);
+        let mut rng = RngState::from_seed([0x32; 32]);
+        let boot = bootstrap_g_theory_pir(grid.view(), GTheoryDesign::Crossed, 200, 0.05, &mut rng)
+            .unwrap();
+        assert!(boot.facet_skipped[0] > 0, "{:?}", boot.facet_skipped);
+        for k in 0..7 {
+            let skipped = boot.facet_skipped[boot.plan[k].axis()] > 0;
+            assert_eq!(boot.component_se[k].is_none(), skipped, "component {k}");
+        }
+        assert!(
+            0 < boot.parametric_skipped && boot.parametric_skipped < 200,
+            "{}",
+            boot.parametric_skipped
+        );
+    }
+
+    /// One resample per stream: no standard error, and the Phi interval is
+    /// the single replicate.
+    #[test]
+    fn single_resample_gives_no_standard_errors_and_a_point_interval() {
+        let mut rng = RngState::from_seed([0x33; 32]);
+        let boot = bootstrap_g_theory_pir(grid().view(), GTheoryDesign::Crossed, 1, 0.05, &mut rng)
+            .unwrap();
+        assert_eq!(boot.component_se, [None; 7]);
+        let (low, high) = boot.phi_coefficient_ci.unwrap();
+        assert_eq!(low, high);
+    }
+
+    /// Replays the documented streams and checks each standard error against
+    /// the sample SD (n − 1) of its plan's corrected replicates, accumulated
+    /// with Welford's method rather than the code's two passes.
+    #[test]
+    fn standard_errors_are_replicate_sds_of_their_plan_streams() {
+        let shape = (4, 3, 2);
+        let sizes = [4, 3, 2];
+        let data = Array3::from_shape_fn(shape, |(p, i, r)| {
+            ((p * 7 + i * 3 + r * 5 + p * i * r) % 11) as f64
+        });
+        let seed = RngState::from_seed([0x34; 32]);
+        let m = 50;
+        let mut rng = seed.clone();
+        let boot =
+            bootstrap_g_theory_pir(data.view(), GTheoryDesign::Crossed, m, 0.05, &mut rng).unwrap();
+        assert_eq!(boot.facet_skipped, [0; 3]);
+        let nonce = seed.clone().into_chacha().next_u64().to_le_bytes();
+        for (facet, name) in GTheoryFacet::ALL.into_iter().zip([
+            b"g-theory/boot-p".as_slice(),
+            b"g-theory/boot-i",
+            b"g-theory/boot-r",
+        ]) {
+            let axis = facet.axis();
+            let mut stream = seed.fork(&[name, &nonce].concat()).into_chacha();
+            let (mut mean, mut m2) = ([0.0_f64; 7], [0.0_f64; 7]);
+            for count in 1..=m {
+                let draw: Vec<usize> = (0..sizes[axis])
+                    .map(|_| stream.next_u32() as usize % sizes[axis])
+                    .collect();
+                let resampled = Array3::from_shape_fn(shape, |(a, b, c)| {
+                    let mut src = [a, b, c];
+                    src[axis] = draw[src[axis]];
+                    data[src]
+                });
+                let fit = fit_replicate(resampled.view(), GTheoryDesign::Crossed).unwrap();
+                let x = correct_single_facet(fit.components(), facet, sizes);
+                for k in 0..7 {
+                    let d = x[k] - mean[k];
+                    mean[k] += d / count as f64;
+                    m2[k] += d * (x[k] - mean[k]);
+                }
+            }
+            for k in (0..7).filter(|&k| boot.plan[k] == facet) {
+                let sd = (m2[k] / (m - 1) as f64).sqrt();
+                let se = boot.component_se[k].unwrap();
+                assert!(
+                    (se - sd).abs() <= 1e-12 * sd,
+                    "component {k} ({facet:?}): {se} vs {sd}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bootstrap_rejects_alpha_outside_the_open_unit_interval() {
+        for alpha in [f64::NAN, 0.0, -0.1, 1.0, f64::INFINITY] {
+            let mut rng = RngState::from_seed([0x35; 32]);
+            let err =
+                bootstrap_g_theory_pir(grid().view(), GTheoryDesign::Crossed, 8, alpha, &mut rng)
+                    .unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    GTheoryBootstrapError::Bootstrap(
+                        BootstrapGivenDataError::OutOfRangeAlpha { .. }
+                    )
+                ),
+                "{alpha}: {err:?}"
+            );
+        }
+    }
+
+    /// With one unit scale, every cell must equal that effect's draw at the
+    /// cell's index, with a positive sign.
+    #[test]
+    fn parametric_generator_places_each_effect() {
+        let sizes = [3, 4, 2];
+        let [_, ni, nr] = sizes;
+        let mut generator = ParametricGenerator::new(sizes);
+        let mut rng = RngState::from_seed([0x36; 32]).into_chacha();
+        let mut out = Array3::<f64>::zeros((3, 4, 2));
+        for k in 0..7 {
+            let mut scale = [0.0; 7];
+            scale[k] = 1.0;
+            generator.fill(&mut out, &scale, &mut rng);
+            for ((a, b, c), &value) in out.indexed_iter() {
+                let index = [
+                    a,
+                    b,
+                    c,
+                    a * ni + b,
+                    a * nr + c,
+                    b * nr + c,
+                    (a * ni + b) * nr + c,
+                ][k];
+                assert_eq!(
+                    value,
+                    generator.effects[k][index],
+                    "effect {k} at {:?}",
+                    (a, b, c)
+                );
+            }
+        }
+    }
+
+    struct ConstantWord(u64);
+
+    impl RngCore for ConstantWord {
+        fn next_u32(&mut self) -> u32 {
+            self.0 as u32
+        }
+        fn next_u64(&mut self) -> u64 {
+            self.0
+        }
+        fn fill_bytes(&mut self, dst: &mut [u8]) {
+            dst.fill(0);
+        }
+    }
+
+    /// The extreme words must stay strictly inside (0, 1): the normal
+    /// quantile of 0 or 1 is infinite.
+    #[test]
+    fn open_unit_excludes_both_endpoints() {
+        assert_eq!(open_unit(&mut ConstantWord(0)), 2.0_f64.powi(-53));
+        assert_eq!(
+            open_unit(&mut ConstantWord(u64::MAX)),
+            1.0 - 2.0_f64.powi(-53)
+        );
+    }
+
+    /// Pinned against 50-digit regularized incomplete gamma values from Sage,
+    /// including the point just below statrs' range.
+    #[test]
+    fn chi_square_cdf_matches_high_precision_oracle_below_statrs_range() {
+        for &(nu, x, exact) in sage_satterthwaite_oracle::CHI_SQUARE_CDF_CASES {
+            let got = chi_square_cdf(&ChiSquared::new(nu).unwrap(), nu, x);
+            if exact == 0.0 || exact < f64::MIN_POSITIVE {
+                assert!(
+                    got <= f64::MIN_POSITIVE,
+                    "nu {nu}, x {x:e}: {got:e} vs {exact:e}"
+                );
+                continue;
+            }
+            // exp of a large negative argument carries |ln P|·ε relative error.
+            let tol = 8.0 * f64::EPSILON * (1.0 + exact.ln().abs());
+            assert!(
+                (got / exact - 1.0).abs() <= tol,
+                "nu {nu}, x {x:e}: {got:e} vs {exact:e}"
+            );
+        }
+    }
+
+    /// Both closed-form intervals are scale-equivariant: multiplying every
+    /// component by c multiplies each Satterthwaite bound by c and leaves the
+    /// G interval unchanged, across the whole normal range.
+    #[test]
+    fn closed_form_intervals_do_not_depend_on_units() {
+        let base = [0.5528, 0.4417, 0.0074, 0.575, 0.1009, 0.1565, 0.9352];
+        let sizes = [10, 4, 2];
+        let unit_ci = satterthwaite_intervals(base, sizes, 0.05);
+        let unit_g = g_f_interval(base, sizes, 0.05).unwrap();
+        let close = |a: f64, b: f64| a == b || (a - b).abs() <= 1e-12 * b.abs();
+        for c in [1e-200, 1e200, 2.0_f64.powi(-900), 2.0_f64.powi(900)] {
+            let scaled = base.map(|v| v * c);
+            for (k, (got, unit)) in satterthwaite_intervals(scaled, sizes, 0.05)
+                .iter()
+                .zip(unit_ci)
+                .enumerate()
+            {
+                let (got, unit) = (got.unwrap(), unit.unwrap());
+                assert!(
+                    close(got.0, unit.0 * c) && close(got.1, unit.1 * c),
+                    "scale {c:e}, component {k}: {got:?} vs {unit:?}"
+                );
+            }
+            let g = g_f_interval(scaled, sizes, 0.05).unwrap();
+            assert!(
+                close(g.0, unit_g.0) && close(g.1, unit_g.1),
+                "scale {c:e}: {g:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn f_interval_domain_edges() {
+        // MS_p = 0 exactly: no interval.
+        assert_eq!(
+            g_f_interval([-0.25, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], [5, 4, 3], 0.05),
+            None
+        );
+    }
+
+    #[test]
+    fn quantile_search_covers_its_documented_range() {
+        // Exponential with mean 1e200: the median is 1e200·ln 2.
+        let q = quantile_by_bisection(|x| -(-x / 1e200).exp_m1(), 0.5).unwrap();
+        assert!(
+            (q / (1e200 * std::f64::consts::LN_2) - 1.0).abs() <= 1e-12,
+            "{q:e}"
+        );
+        // A quantile above 1e300 is outside the documented range.
+        assert_eq!(quantile_by_bisection(|x| (x / 1e305).min(1.0), 0.5), None);
+    }
+
+    #[test]
+    fn coefficients_match_exact_rationals_at_unequal_counts() {
+        // Unit components at 3 items, 4 raters: G = 1/(1 + 1/3 + 1/4 + 1/12)
+        // = 3/5 and Phi = 1/(5/3 + 1/3 + 1/4 + 1/12) = 3/7.
+        let r = GTheoryResult::from_components(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 3, 4).unwrap();
+        assert!((r.g_coefficient.unwrap() - 0.6).abs() <= 2.0 * f64::EPSILON);
+        assert!((r.phi_coefficient.unwrap() - 3.0 / 7.0).abs() <= 2.0 * f64::EPSILON);
+    }
+
+    #[test]
+    fn minimum_design_ties_keep_the_first_design() {
+        let r = GTheoryResult::from_components(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 2, 2).unwrap();
+        let best = find_minimum_design(&r, 0.0, 3, 3, |_, _| 1.0)
+            .unwrap()
+            .unwrap();
+        assert_eq!((best.n_items, best.n_raters), (1, 1));
+    }
+
+    #[test]
+    fn display_reports_components_and_each_coefficient_state() {
+        assert_eq!(GTheoryComponent::Pi.to_string(), "\u{03c3}\u{00b2}(pi)");
+        let available =
+            GTheoryResult::from_components(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 3, 4).unwrap();
+        assert_eq!(
+            available.to_string(),
+            "G-theory (p x i x r)\n\n  Variance components (signed estimates):\n    \
+             σ²(p)    = 1.0000\n    σ²(i)    = 1.0000\n    σ²(r)    = 1.0000\n    \
+             σ²(pi)   = 1.0000\n    σ²(pr)   = 1.0000\n    σ²(ir)   = 1.0000\n    \
+             σ²(pir)  = 1.0000\n\n  3 items, 4 raters: G = 0.6000  Φ = 0.4286\n"
+        );
+        let negative =
+            GTheoryResult::from_components(1.0, -0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 1, 1).unwrap();
+        assert!(negative
+            .to_string()
+            .ends_with("G = 1.0000  Φ = unavailable (negative σ²(i))\n"));
+        let zeroed = negative.with_negative_components_zeroed();
+        assert!(zeroed
+            .to_string()
+            .contains("Variance components (negative estimates set to zero):"));
+        let undefined =
+            GTheoryResult::from_components(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1, 1).unwrap();
+        assert!(undefined
+            .to_string()
+            .ends_with("G = undefined (0/0)  Φ = undefined (0/0)\n"));
+        let mut nonfinite = available;
+        nonfinite.phi_coefficient = Err(GTheoryCoefficientError::NonFinite);
+        assert!(nonfinite
+            .to_string()
+            .ends_with("Φ = unavailable (nonfinite)\n"));
+    }
+
+    #[test]
+    fn smallest_normal_component_is_accepted() {
+        assert!(GTheoryResult::from_components(
+            f64::MIN_POSITIVE,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            1,
+            1
+        )
+        .is_ok());
     }
 }
