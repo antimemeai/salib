@@ -1,0 +1,19 @@
+[package]
+name = "salib-gtheory-coverage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Coverage study for salib's G-theory standard errors and intervals (salib #5)."
+publish = false
+
+[dependencies]
+salib-core = { path = "../salib-core" }
+salib-estimators = { path = "../salib-estimators" }
+ndarray = "0.16"
+rand = { version = "0.9", default-features = false }
+statrs = "0.18"
+
+[lints]
+workspace = true

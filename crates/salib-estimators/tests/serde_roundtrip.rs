@@ -394,17 +394,18 @@ fn g_theory_result_roundtrip() {
             "g_coefficient": {"Ok": 0.88},
             "phi_coefficient": {"Err": {"NegativeComponent": {"component": "Ir"}}},
             "negative_components_zeroed": false,
-            "variance_component_ci_low": [null, 0.1, 0.0, 0.0, 0.0, 0.0, 0.01],
-            "variance_component_ci_high": [null, 0.6, 0.5, 0.3, 0.2, 0.1, 0.05],
-            "g_coefficient_ci_low": null,
-            "g_coefficient_ci_high": null,
-            "phi_coefficient_ci_low": null,
-            "phi_coefficient_ci_high": null,
-            "bootstrap_iterations": null,
-            "bootstrap_alpha": null,
-            "bootstrap_skipped": null,
-            "g_coefficient_failed": null,
-            "phi_coefficient_failed": null
+            "bootstrap": {
+                "plan": ["P", "I", "R", "P", "P", "I", "P"],
+                "component_se": [0.4, 0.2, null, 0.05, 0.03, 0.02, 0.01],
+                "component_ci": [[0.8, 2.4], null, [0.0, 0.6], [0.0, 0.3], [0.0, 0.2], [0.0, 0.1], [0.01, 0.05]],
+                "g_coefficient_ci": [0.7, 0.95],
+                "phi_coefficient_ci": null,
+                "n_resamples": 999,
+                "alpha": 0.05,
+                "facet_skipped": [0, 0, 1],
+                "parametric_skipped": 0,
+                "phi_coefficient_failed": 3
+            }
         }"#,
     );
 }
