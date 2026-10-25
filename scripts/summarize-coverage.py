@@ -67,7 +67,8 @@ def main(paths):
     print("\n## G and Phi by pattern, data and rater count\n")
     print("| estimand | method | slice | pass | coverage min / median / max |")
     print("|---|---|---|---|---|")
-    for e, m in [("G", "F interval"), ("Phi", "parametric")]:
+    methods = sorted({(r["estimand"], r["method"]) for r in data if r["estimand"] in ("G", "Phi")})
+    for e, m in methods:
         for key in ["pattern", "data", "n_r"]:
             sl = collections.defaultdict(list)
             for r in data:

@@ -132,8 +132,9 @@ struct GpqRep {
     error: bool,
     /// Clipped point components from the harness's own ANOVA.
     point: Option<[f64; 7]>,
-    /// Intervals for the seven components, then G, then Phi.
-    intervals: [Option<(f64, f64)>; 9],
+    /// Intervals for the seven components, then G and Phi from clipped
+    /// components, then G and Phi from signed components (clipped to [0, 1]).
+    intervals: [Option<(f64, f64)>; 11],
 }
 
 fn replicate(cell: &Cell, rep: usize, draws: usize) -> GpqRep {
@@ -152,19 +153,23 @@ fn replicate(cell: &Cell, rep: usize, draws: usize) -> GpqRep {
     }
     let point = components(&ms, cell.sizes).map(|c| c.max(0.0));
     let mut rng = root.fork(salt("pivots").as_bytes()).into_chacha();
-    let mut samples: Vec<Vec<f64>> = (0..9).map(|_| Vec::with_capacity(draws)).collect();
+    let mut samples: Vec<Vec<f64>> = (0..11).map(|_| Vec::with_capacity(draws)).collect();
     let (fi, fr) = (ni as f64, nr as f64);
     for _ in 0..draws {
         let ems: [f64; 7] = std::array::from_fn(|j| ms[j] * df[j] / chi_square(df[j], &mut rng));
-        let c = components(&ems, cell.sizes).map(|v| v.max(0.0));
+        let signed = components(&ems, cell.sizes);
+        let c = signed.map(|v| v.max(0.0));
         let (g, phi) = coefficients(&c, fi, fr);
         for k in 0..7 {
             samples[k].push(c[k]);
         }
         samples[7].push(g);
         samples[8].push(phi);
+        let (g_signed, phi_signed) = coefficients(&signed, fi, fr);
+        samples[9].push(g_signed.clamp(0.0, 1.0));
+        samples[10].push(phi_signed.clamp(0.0, 1.0));
     }
-    let mut intervals = [None; 9];
+    let mut intervals = [None; 11];
     for (k, s) in samples.iter_mut().enumerate() {
         s.retain(|v| v.is_finite());
         if s.is_empty() {
@@ -245,15 +250,20 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error + Send + Sync>> {
             .iter()
             .zip(t)
             .map(|(n, v)| ((*n).to_string(), v))
-            .chain([("G".to_string(), gt), ("Phi".to_string(), phit)])
+            .chain([
+                ("G".to_string(), gt),
+                ("Phi".to_string(), phit),
+                ("G".to_string(), gt),
+                ("Phi".to_string(), phit),
+            ])
             .collect();
         for (k, (name, value)) in estimands.iter().enumerate() {
             let points: Vec<Option<f64>> = reps
                 .iter()
                 .map(|r| {
                     r.point.map(|c| match k {
-                        7 => coefficients(&c, cell.sizes[1] as f64, cell.sizes[2] as f64).0,
-                        8 => coefficients(&c, cell.sizes[1] as f64, cell.sizes[2] as f64).1,
+                        7 | 9 => coefficients(&c, cell.sizes[1] as f64, cell.sizes[2] as f64).0,
+                        8 | 10 => coefficients(&c, cell.sizes[1] as f64, cell.sizes[2] as f64).1,
                         _ => c[k],
                     })
                 })
@@ -263,7 +273,11 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error + Send + Sync>> {
                 &mut rows,
                 cell,
                 name,
-                "fiducial GPQ",
+                if k >= 9 {
+                    "fiducial GPQ, signed"
+                } else {
+                    "fiducial GPQ"
+                },
                 *value,
                 &summarize(*value, &ivs, &points),
                 &format!("errors {errors}"),
