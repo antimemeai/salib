@@ -107,3 +107,43 @@ Attaching Phi only when the signed Phi is available left it missing in about
 | Phi | parametric | n_r=2 | 3/30 | 0.694 / 0.939 / 0.971 |
 | Phi | parametric | n_r=3 | 5/30 | 0.800 / 0.946 / 0.966 |
 | Phi | parametric | n_r=5 | 6/30 | 0.870 / 0.947 / 0.963 |
+
+## Phi experiment (2026-10-25)
+
+Raw rows are in `coverage-2026-10-25/phi-experiment.md`: n_sim = 1900,
+B = 999, at c5ee8b4. Design: journal "Phi experiment".
+
+| Cell | Zeroed estimate / percentile (salib) | Bias-corrected | Basic | Width: estimate vs true spread |
+|---|---|---|---|---|
+| Jiang et al. 100×20×2 (their normal condition) | **.960** | .944 | .916 | .245 vs .237 |
+| Control 20×20×3 all-one | .953 | .946 | .801 | .579 vs .591 |
+| Control 50×8×5 all-one | .951 | .943 | .873 | .345 vs .349 |
+| 200×20×2 high-G | .696 | .706 | .558 | .192 vs .231 |
+| 200×20×2 all-one | .798 | .794 | .631 | .356 vs .443 |
+| 200×20×3 high-G | .798 | .816 | .674 | .122 vs .133 |
+| 200×8×2 high-G | .814 | .746 | .595 | .193 vs .239 |
+| 50×20×2 high-G | .846 | .817 | .653 | .223 vs .258 |
+
+- **Fidelity.** salib's method reproduces Jiang et al.'s coverage in their own
+  condition (.960 against their reported .952), and passes the control cells.
+  The departures from their procedure (zeroed ANOVA instead of REML
+  generating values, and a percentile interval, which they do not specify)
+  are not what fails.
+- **Limit.** In cells with many persons and items but two or three raters,
+  the bootstrap spread is 14–20% narrower than the true spread, and every
+  miss lies above the truth. This fits the plug-in hypothesis: with one or
+  two rater degrees of freedom the estimated rater variance is often zeroed
+  or too small, so the bootstrap simulates too little rater variation and too
+  high a Φ. Bias-corrected percentile does not fix it, and the basic
+  interval is worse.
+- **Flawed oracle arm.** Generating from the true components makes the
+  percentile interval essentially fixed across replications, so it always
+  covers the truth (1.000 by construction), and the basic and bias-corrected
+  rows built on it are not meaningful. Only its widths, the true sampling
+  spread of Φ̂, are used above.
+
+**Decision (operator).** Keep the parametric percentile Phi interval,
+documented as reproducing Jiang et al. (median .946 over the 90 study cells)
+and unreliable when n_r ≤ 3 with large n_p and n_i. A follow-up should
+propagate rater-component uncertainty, either with a nested bootstrap or a
+closed form analogous to G's F interval.
