@@ -299,3 +299,31 @@ which accepts 0. Fixes:
 Cell 43 then reruns all 1900 replicates without error. The guard changes
 behavior only where the old code panicked, and seeds are keyed by cell, so
 cells 0–42 stand and the run resumes at cell 43.
+
+## Preliminary findings, cells 0–42 (2026-10-24)
+
+The resumed run (cells 43–90, at 0000970) was started, and neuroses then
+dropped off the network again, unreachable since shortly after the start.
+Both outages began within minutes of a heavy job starting: a release build,
+then a build followed by a 28-thread run. The operator has been asked to
+check the kernel log. The results are expected to be on its disk.
+
+From the 43 finished normal-data cells (n_p ∈ {20, 50}), not yet the full
+study:
+- **G F interval:** 41/43 cells pass, with balanced tails in all three
+  patterns.
+- **Component intervals:** Satterthwaite beats parametric percentiles on
+  every component. The parametric intervals sit too low (mostly lower
+  misses), because a percentile interval does not correct the skew of a
+  variance estimate; Satterthwaite is the pivoted χ² form. The single-MS
+  component σ²(pir) passes in 39/43 cells.
+- **σ²(r):** fails under both methods (coverage .73 and .83), as planned.
+- **Facet SE ratios:** median 0.95–1.00 for every component.
+- **Phi parametric:** coverage .908–.971, worst in the high-G pattern; 8/43
+  cells pass.
+- **Phi attachment:** gating Phi on the signed point leaves it unavailable
+  in about a third of datasets. Like G's F interval, it is an interval for
+  the parameter.
+
+Decisions wait for the full study; `scripts/summarize-coverage.py` produces
+the summary from the harness output.
