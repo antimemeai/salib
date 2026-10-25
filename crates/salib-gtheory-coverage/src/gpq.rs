@@ -132,9 +132,72 @@ struct GpqRep {
     error: bool,
     /// Clipped point components from the harness's own ANOVA.
     point: Option<[f64; 7]>,
-    /// Intervals for the seven components, then G and Phi from clipped
-    /// components, then G and Phi from signed components (clipped to [0, 1]).
+    /// Intervals for the seven components, then G and Phi, then G and Phi
+    /// with calibrated percentile levels.
     intervals: [Option<(f64, f64)>; 11],
+}
+
+/// Simulated datasets and GPQ draws per dataset for the level calibration.
+const CAL_OUTER: usize = 400;
+const CAL_INNER: usize = 500;
+
+/// Expected mean squares of components (the EMS equations).
+fn expected_mean_squares(c: &[f64; 7], s: [usize; 3]) -> [f64; 7] {
+    let [p, i, r, pi, pr, ir, pir] = *c;
+    let [np, ni, nr] = s.map(|v| v as f64);
+    [
+        pir + nr * pi + ni * pr + ni * nr * p,
+        pir + nr * pi + np * ir + np * nr * i,
+        pir + ni * pr + np * ir + np * ni * r,
+        pir + nr * pi,
+        pir + ni * pr,
+        pir + np * ir,
+        pir,
+    ]
+}
+
+/// One GPQ draw of (G, Phi) from observed mean squares.
+fn gpq_draw(ms: &[f64; 7], df: &[f64; 7], s: [usize; 3], rng: &mut impl RngCore) -> [f64; 2] {
+    let ems: [f64; 7] = std::array::from_fn(|j| ms[j] * df[j] / chi_square(df[j], rng));
+    let c = components(&ems, s).map(|v| v.max(0.0));
+    let (g, phi) = coefficients(&c, s[1] as f64, s[2] as f64);
+    [g, phi]
+}
+
+/// Percentile levels that make the GPQ interval calibrated at the clipped
+/// point estimate (prepivoting). Under the normal model a dataset's mean
+/// squares are `EMS_j χ²(df_j)/df_j`, so no data are generated. For each
+/// simulated dataset, `u` is the share of its GPQ draws at or below the
+/// coefficient's value at the estimate; the levels are the α/2 and 1 − α/2
+/// quantiles of `u`, for (G, Phi).
+fn calibrated_levels(
+    point: &[f64; 7],
+    df: &[f64; 7],
+    s: [usize; 3],
+    rng: &mut impl RngCore,
+) -> [(f64, f64); 2] {
+    let ems = expected_mean_squares(point, s);
+    let (g0, phi0) = coefficients(point, s[1] as f64, s[2] as f64);
+    let mut u = [Vec::with_capacity(CAL_OUTER), Vec::with_capacity(CAL_OUTER)];
+    for _ in 0..CAL_OUTER {
+        let ms: [f64; 7] = std::array::from_fn(|j| ems[j] * chi_square(df[j], rng) / df[j]);
+        let mut below = [0usize; 2];
+        for _ in 0..CAL_INNER {
+            let d = gpq_draw(&ms, df, s, rng);
+            below[0] += usize::from(d[0] <= g0);
+            below[1] += usize::from(d[1] <= phi0);
+        }
+        for k in 0..2 {
+            u[k].push(below[k] as f64 / CAL_INNER as f64);
+        }
+    }
+    u.map(|mut v| {
+        v.sort_by(f64::total_cmp);
+        (
+            percentile(&v, ALPHA / 2.0),
+            percentile(&v, 1.0 - ALPHA / 2.0),
+        )
+    })
 }
 
 fn replicate(cell: &Cell, rep: usize, draws: usize) -> GpqRep {
@@ -157,17 +220,13 @@ fn replicate(cell: &Cell, rep: usize, draws: usize) -> GpqRep {
     let (fi, fr) = (ni as f64, nr as f64);
     for _ in 0..draws {
         let ems: [f64; 7] = std::array::from_fn(|j| ms[j] * df[j] / chi_square(df[j], &mut rng));
-        let signed = components(&ems, cell.sizes);
-        let c = signed.map(|v| v.max(0.0));
+        let c = components(&ems, cell.sizes).map(|v| v.max(0.0));
         let (g, phi) = coefficients(&c, fi, fr);
         for k in 0..7 {
             samples[k].push(c[k]);
         }
         samples[7].push(g);
         samples[8].push(phi);
-        let (g_signed, phi_signed) = coefficients(&signed, fi, fr);
-        samples[9].push(g_signed.clamp(0.0, 1.0));
-        samples[10].push(phi_signed.clamp(0.0, 1.0));
     }
     let mut intervals = [None; 11];
     for (k, s) in samples.iter_mut().enumerate() {
@@ -177,6 +236,14 @@ fn replicate(cell: &Cell, rep: usize, draws: usize) -> GpqRep {
         }
         s.sort_by(f64::total_cmp);
         intervals[k] = Some((percentile(s, ALPHA / 2.0), percentile(s, 1.0 - ALPHA / 2.0)));
+    }
+    let mut cal_rng = root.fork(salt("calibration").as_bytes()).into_chacha();
+    let levels = calibrated_levels(&point, &df, cell.sizes, &mut cal_rng);
+    for (k, (low, high)) in levels.into_iter().enumerate() {
+        let s = &samples[7 + k];
+        if !s.is_empty() {
+            intervals[9 + k] = Some((percentile(s, low), percentile(s, high)));
+        }
     }
     GpqRep {
         error: false,
@@ -274,7 +341,7 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error + Send + Sync>> {
                 cell,
                 name,
                 if k >= 9 {
-                    "fiducial GPQ, signed"
+                    "fiducial GPQ, calibrated"
                 } else {
                     "fiducial GPQ"
                 },
